@@ -34,7 +34,13 @@ final class StartupDiagnostics {
         append(report, new File(context.getFilesDir(), "temp/launch-settings.conf"), 8192);
         append(report, new File(context.getFilesDir(), "temp/gpu-driver.conf"), 4096);
         File external = context.getExternalFilesDir(null);
-        if (external != null) append(report, new File(external, "d2r-package/manifest.json"), 8192);
+        if (external != null) {
+            append(report, new File(external, "d2r-package/manifest.json"), 8192);
+            report.append("\nBase shader profile:");
+            append(report, new File(external, "d2r-package/shaders/host-subgroup-size.txt"), 32);
+            report.append("\nSystem GPU compatibility profile:");
+            append(report, new File(external, "d2r-package/shaders/subgroup64/host-subgroup-size.txt"), 32);
+        }
         append(report, new File(context.getFilesDir(), "game.log"), 65536);
         return report.toString();
     }

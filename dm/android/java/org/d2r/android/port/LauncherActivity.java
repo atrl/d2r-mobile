@@ -381,6 +381,9 @@ public final class LauncherActivity extends Activity {
         TextView crashReport = item(text("dmAndroidCrashReport"), 19, PARCHMENT, false, true);
         crashReport.setOnClickListener(v -> showDiagnostics());
         column.addView(crashReport);
+        TextView gpuRepair = item(text("dmAndroidGpuRepair"), 19, PARCHMENT, false, true);
+        gpuRepair.setOnClickListener(v -> repairSystemGpu());
+        column.addView(gpuRepair);
 
         TextView downloadItem = item(text("dmAndroidDataDownload"), 19, PARCHMENT, false, true);
         downloadItem.setOnClickListener(v -> downloadData());
@@ -685,6 +688,57 @@ public final class LauncherActivity extends Activity {
         return format.equals(failure.key)
             ? String.valueOf(error.getMessage())
             : String.format(format, failure.arguments);
+    }
+
+    private void repairSystemGpu() {
+        if (importing) return;
+        if (!packageReady()) { setStatus(text("dmAndroidLaunchNeedsImport"), WARNING); return; }
+        new AlertDialog.Builder(this).setTitle(text("dmAndroidGpuRepair"))
+            .setMessage(text("dmAndroidGpuRepairNotice"))
+            .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                importing = true; cancelImport = false; updateStartState();
+                getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                setStatus(text("dmAndroidDataConnecting"), MUTED);
+                new Thread(() -> {
+                    try {
+                        File directory = new File(packageDirectory().getParentFile(), "data-download");
+                        if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Cannot create download folder");
+                        File archive = new File(directory, "d2r-shaders64-v1.zip");
+                        if (directory.getUsableSpace() < 700L * 1024 * 1024) throw new IOException(text("dmAndroidGpuRepairSpace"));
+                        GitHubData.fetchWithRetry(new java.net.URL(ShaderPatch.URL), archive, ShaderPatch.SIZE, ShaderPatch.HASH, new GitHubData.Sink() {
+                            private long last;
+                            public boolean cancelled() { return cancelImport; }
+                            public void progress(long bytes) {
+                                long now = android.os.SystemClock.elapsedRealtime();
+                                if (last != 0 && now-last < 500 && bytes != ShaderPatch.SIZE) return;
+                                last=now;
+                                String message=String.format(text("dmAndroidGpuRepairProgress"), bytes*100.0/ShaderPatch.SIZE, bytes/1048576.0);
+                                runOnUiThread(() -> setStatus(message, MUTED));
+                            }
+                            public void phase(String phase, int attempt) {
+                                String message="retrying".equals(phase) ? String.format(text("dmAndroidDataRetrying"), attempt)
+                                    : text("verifying".equals(phase) ? "dmAndroidDataVerifying" : "dmAndroidDataConnecting");
+                                runOnUiThread(() -> setStatus(message, MUTED));
+                            }
+                        });
+                        runOnUiThread(() -> setStatus(text("dmAndroidGpuRepairInstalling"), MUTED));
+                        ShaderPatch.install(archive, new File(packageDirectory(), "shaders"));
+                        archive.delete();
+                        runOnUiThread(() -> {
+                            driverIndex=0; writeState(); applyLabels();
+                            setStatus(text("dmAndroidGpuRepairDone"), PARCHMENT);
+                        });
+                    } catch (Exception error) {
+                        runOnUiThread(() -> setStatus(String.valueOf(error.getMessage()), WARNING));
+                    } finally {
+                        importing=false;
+                        runOnUiThread(() -> {
+                            getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                            updateStartState();
+                        });
+                    }
+                }, "d2r-gpu-repair").start();
+            }).setNegativeButton(android.R.string.cancel, null).show();
     }
 
     private void showDiagnostics() {

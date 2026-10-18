@@ -480,4 +480,10 @@ static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {
     { "dmAndroidCrashReport", "启动错误与诊断", "Startup errors and diagnostics" },
     { "dmAndroidCrashExport", "导出诊断报告", "Export diagnostic report" },
     { "dmAndroidCrashExported", "诊断报告已导出；请发送该文本文件以排查启动退出。", "Report exported; send this text file to investigate the startup exit." },
+    { "dmAndroidGpuRepair", "修复系统驱动兼容性", "Repair system GPU compatibility" },
+    { "dmAndroidGpuRepairNotice", "下载约 142 MB 的图形兼容补丁，适用于系统驱动启动时提示子组 32/64 不匹配的设备。保留现有游戏数据与存档；安装完成后使用系统驱动，再点击启动游戏。", "Download a 142 MB graphics patch for system drivers reporting a 32/64 subgroup mismatch. Existing game data and saves are preserved. After installation, use the system driver and start the game." },
+    { "dmAndroidGpuRepairSpace", "请预留至少 700 MB 空间安装兼容补丁。", "Reserve at least 700 MB to install the compatibility patch." },
+    { "dmAndroidGpuRepairProgress", "兼容补丁 %.2f%% · 已下载 %.1f MiB", "Compatibility patch %.2f%% · %.1f MiB downloaded" },
+    { "dmAndroidGpuRepairInstalling", "正在安装图形兼容补丁，请保持应用在前台…", "Installing graphics compatibility data; keep the app in the foreground…" },
+    { "dmAndroidGpuRepairDone", "兼容补丁已安装，已选择系统驱动。请点击启动游戏。", "Compatibility patch installed and system driver selected. Start the game now." },
 };

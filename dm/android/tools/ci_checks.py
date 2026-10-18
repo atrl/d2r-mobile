@@ -109,6 +109,7 @@ def main():
         # 版本折算：Android 拒绝版本号倒退的安装，这条规则要有回归挡住。
         # The version mapping: Android refuses an install whose version code goes backwards, so it needs a regression.
         python_check("APK 版本折算（test_version）", "dm/android/tests/test_version.py")
+        python_check("Shader subgroup selection", "dm/android/tests/test_shader_profile.py")
         python_check("Install bundle", "dm/android/tests/test_install_bundle.py")
         python_check("Apple guest recovery", "dm/android/tests/test_apple_guest.py")
         python_check("Android context retargeting", "dm/android/tests/test_apple_retarget.py")
@@ -130,7 +131,8 @@ def main():
         # accept anything with at least one file per category, so a hollow package could pass and leave the game
         # unable to start.
         for source, test, label in (("TouchPadState.java", "TouchPadStateTest", "Touch cancellation"),
-                                    ("SaveArchive.java", "SaveArchiveTest", "存档包"),
+                                    ("ShaderPatch.java", "ShaderPatchTest", "Shader compatibility patch"),
+            ("SaveArchive.java", "SaveArchiveTest", "存档包"),
                                     ("PackageArchive.java", "PackageArchiveTest", "数据包导入"),
                                     ("ReleaseVersion.java", "ReleaseVersionTest", "GitHub release ordering"),
                                     ("GitHubData.java", "GitHubDataTest", "GitHub data download/resume/integrity")):
