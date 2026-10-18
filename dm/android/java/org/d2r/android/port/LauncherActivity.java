@@ -211,7 +211,8 @@ public final class LauncherActivity extends Activity {
     // driver actually selected and refuses to start on a mismatch, so subgroup_size has to be copied from here
     // rather than guessed.
     private String readProfileSize() {
-        File profile = new File(packageDirectory(), "shaders/host-subgroup-size.txt");
+        File variant = new File(packageDirectory(), "shaders/subgroup64/host-subgroup-size.txt");
+        File profile = variant.isFile() ? variant : new File(packageDirectory(), "shaders/host-subgroup-size.txt");
         try (InputStream stream = new FileInputStream(profile)) {
             byte[] text = new byte[16];
             int count = stream.read(text);

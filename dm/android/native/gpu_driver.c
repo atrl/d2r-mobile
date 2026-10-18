@@ -274,15 +274,21 @@ static int has_driver_properties(dm_vk_driver *d,VkPhysicalDevice physical,uint3
         for(uint32_t i=0;i<count;i++)if(!strcmp(extensions[i].extensionName,VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME))supported=1;
     free(extensions);return supported;
 }
-static int profile_matches(dm_vk_driver *d,const char *directory) {
+static int profile_matches_at(dm_vk_driver *d,const char *directory,int variant) {
     char path[1200];if(snprintf(path,sizeof path,"%s/host-subgroup-size.txt",directory)>=(int)sizeof path)return driver_error(d,"shader profile path is too long");
     FILE *file=fopen(path,"r");if(!file)return driver_error(d,"custom game requires shader subgroup profile: %s",strerror(errno));
     char text[32];size_t n=fread(text,1,sizeof text-1,file);int extra=fgetc(file),error=ferror(file);fclose(file);text[n]=0;
     errno=0;char *end;unsigned long size=strtoul(text,&end,10);while(isspace((unsigned char)*end))end++;
     if(error||extra!=EOF||errno||end==text||*end||(size!=32&&size!=64&&size!=128))return driver_error(d,"invalid shader subgroup profile");
+    if(size!=d->effective_shader_subgroup_size&&!variant&&d->effective_shader_subgroup_size==64){
+        char alternate[1200];
+        if(snprintf(alternate,sizeof alternate,"%s/subgroup64",directory)>=(int)sizeof alternate)return driver_error(d,"shader variant path is too long");
+        return profile_matches_at(d,alternate,1);
+    }
     if(size!=d->effective_shader_subgroup_size)return driver_error(d,"shader host subgroup %lu differs from selected shader%u (physical default%u); rebuild the cache",size,d->effective_shader_subgroup_size,d->subgroup_size);
     driver_log("shader host subgroup=%lu matches selected shader size; physical_default=%u explicit_request=%u",size,d->subgroup_size,d->requested_subgroup_size);return 1;
 }
+static int profile_matches(dm_vk_driver *d,const char *directory) {return profile_matches_at(d,directory,0);}
 int dm_vk_driver_validate(dm_vk_driver *d,VkPhysicalDevice physical,const char *shader_directory) {
     VkPhysicalDeviceProperties base;d->vkGetPhysicalDeviceProperties(physical,&base);
     int supported=has_driver_properties(d,physical,base.apiVersion);
