@@ -55,6 +55,11 @@ jobs:
           export JAVA_HOME="$DM_ANDROID_TOOLS/jdk"
           export PATH="$JAVA_HOME/bin:$PATH"
           "$DM_ANDROID_TOOLS/build-tools/apksigner" verify --verbose --print-certs dm/android/build/D2R-Android-port.apk > dm/android/build/signature.txt
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            python3 dm/android/tools/verify_apk.py dm/android/build/D2R-Android-port.apk --release
+          else
+            python3 dm/android/tools/verify_apk.py dm/android/build/D2R-Android-port.apk
+          fi
           python3 dm/android/tools/make_kit.py --version "${APK_VERSION//\//-}"
           cp dm/android/build/D2R-Android-port.apk dist/
           cp dm/android/build/signature.txt dist/
