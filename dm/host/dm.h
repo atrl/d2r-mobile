@@ -72,6 +72,8 @@ uint64_t dm_nvn_sub_cpu_ns(void);     // 提交（不含出图）累计 CPU 纳�
 int dm_ingame_now(void);              // 是否在局内（diag.c） | Whether we are in a run (diag.c)
 void dm_3d_scale_feed(double iv_ms);   // 出图线程每帧报实际上屏间隔（−1 丢弃 / 0 无读数），驱动动态 3D 比例 | The present thread reports the actual present interval every frame (−1 discard / 0 no reading), driving the dynamic 3D scale
 float dm_3d_scale_cur(void);          // 当前生效的 3D 渲染比例（hle_oe.c scale3d_tick）     // 当前累计出图帧数（DM_TICKS 对齐观测） | The 3D render scale currently in effect (hle_oe.c scale3d_tick)     // current cumulative count of presented frames (for DM_TICKS alignment observation)
+void dm_3d_scale_resumed(void);       // 前端：刚回前台。回来头几秒的慢帧是恢复（表面重建、缓存变冷），不是 GPU 吃紧：停判 3 秒 | front end: just returned to the foreground. Slow frames in the first seconds back are recovery (surface rebuild, caches gone cold), not GPU pressure: stop judging for 3 seconds
+void dm_3d_scale_set_preset(int preset);   // 游戏内菜单的「画质」档位：-1 自动（动态控制器照旧）、0 高质量（配置值满值）、1 平衡 0.85、2 性能 0.70；固定档位期间动态控制器不插手，下一拍生效 | In-game menu "quality" preset: -1 automatic (the dynamic controller keeps working), 0 high (the configured full value), 1 balanced 0.85, 2 performance 0.70; while a preset is pinned the dynamic controller stays out of the way, effective on the next tick
 void dm_backtrace(uint64_t fp);
 void crash_watch_progress(uint32_t tick, const char *stage);
 void crash_watch_frame(void);
@@ -99,6 +101,16 @@ void dm_guest_write_prep_register(void (*fn)(void *addr, size_t len));
 void dm_res_report_register(void (*fn)(uint32_t tick, const char *why));   // 资源计数回调（图形层注册）：每 250 拍、读取画面已撤、记满退出时调 | Resource count callback (registered by the graphics layer): called every 250 ticks, when the loading screen has been dismissed, and on exit when the record is full
 void (*dm_res_report_cb(void))(uint32_t tick, const char *why);   // 取已注册的资源计数回调（未注册为空） | Get the registered resource count callback (null if not registered)
 void dm_guest_write_prepare(void *addr, size_t len);
+// 普通线程写入 guard：共享锁覆盖 prepare 与实际写，每个 begin 恰好 prepare 一次；四接口保留 errno。
+// Regular-thread write guard: shared lock spans prepare and actual writes, once per begin; all four APIs preserve errno.
+// 同类可嵌套且必须同线程配对；writer 内 try 返回 0，snapshot 内写入或 end 错配会中止。
+// Same-kind nesting must pair on one thread; try inside a writer returns 0; writing inside a snapshot or mismatched end aborts.
+// 禁用于信号、queue/GPU 等待或客体回调；锁顺序 queue -> guard -> dirty。
+// Never use in signals or across queue/GPU waits or guest callbacks; lock order: queue -> guard -> dirty.
+void dm_guest_host_write_begin(void *addr, size_t len);
+void dm_guest_host_write_end(void);
+int dm_guest_snapshot_try_begin(void);  // 1=成功，0=忙；其余锁错误中止 | 1=acquired, 0=busy; other lock errors abort.
+void dm_guest_snapshot_end(void);
 // 图形生命周期（hle_nvn.c）：on=1 挂起（之后提交 / 出图阻塞，返回前 GPU 在途工作清空），on=0 恢复；iOS 前端在进出后台时调用
 // Graphics lifecycle (hle_nvn.c): on=1 suspends (afterwards submit / present block, and in-flight GPU work is drained before returning), on=0 resumes; called by the iOS front end when entering and leaving the background
 void dm_gfx_suspend(int on);

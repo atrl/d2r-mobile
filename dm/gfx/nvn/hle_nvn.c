@@ -26,6 +26,11 @@
 #include "nvn_pace.h"
 #include "../../host/front.h"
 #include "nvn_dirty.h"
+#ifdef __ANDROID__
+#include "../../android/native/performance_hint.h"
+#pragma weak dm_android_performance_frame_begin
+#pragma weak dm_android_performance_frame_end
+#endif
 #include <mach/mach_time.h>
 #include <mach/mach.h>
 #include <TargetConditionals.h>
@@ -40,8 +45,13 @@
 #include <mach/thread_policy.h>
 #include <assert.h>
 #include <stdatomic.h>
+#ifdef __ANDROID__
+#include "../../android/native/host_posix.h"
+#endif
+#ifndef __ANDROID__
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
+#endif
 
 // ---------- 槽表、跳板、未实现桩 ----------
 // ---------- Slot table, thunks, unimplemented stubs ----------
@@ -63,16 +73,22 @@ uint64_t nvn_unimpl_c(nvn_slot_t *slot, uint64_t x0, uint64_t x1, uint64_t x2) {
 }
 
 typedef struct { const char *name; void *fn; } nvn_impl;
+#ifdef __ANDROID__
+// ELF 注册表保持指针对齐，防止链接器在记录间插入空洞。| Keep the ELF registry pointer-aligned without gaps between records.
+#define NVN_ENTRY __attribute__((used, retain, section("dm_nvn"), aligned(sizeof(void *))))
+#else
+#define NVN_ENTRY __attribute__((used, section("__DATA,swnvn")))
+#endif
 #define NVN(name, ret, ...)                                                                       \
     static ret h_##name(__VA_ARGS__);                                                             \
     static const NVNT_##name chk_##name __attribute__((unused)) = h_##name;                       \
-    __attribute__((used, section("__DATA,swnvn"))) static const nvn_impl e_##name = {#name, (void *)h_##name}; \
+    NVN_ENTRY static const nvn_impl e_##name = {#name, (void *)h_##name}; \
     static ret h_##name(__VA_ARGS__)
 // 无原型的新版接口：不做签名检查
 // Newer interfaces without prototypes: no signature check
 #define NVN_NOPROTO(name, ret, ...)                                                               \
     static ret h_##name(__VA_ARGS__);                                                             \
-    __attribute__((used, section("__DATA,swnvn"))) static const nvn_impl e_##name = {#name, (void *)h_##name}; \
+    NVN_ENTRY static const nvn_impl e_##name = {#name, (void *)h_##name}; \
     static ret h_##name(__VA_ARGS__)
 
 static int g_log;
@@ -83,9 +99,15 @@ static unsigned g_nsem;                          // 语义实现个数（nvn_ini
 static void nvn_init_slots(void) {
     static int done; if (done) return; done = 1;
     g_log = getenv("DM_NVN_LOG") != NULL;
+#ifdef __ANDROID__
+    extern const nvn_impl __start_dm_nvn[], __stop_dm_nvn[];
+    const nvn_impl *im = __start_dm_nvn;
+    unsigned nim = (unsigned)(__stop_dm_nvn - im), hit = 0;
+#else
     unsigned long sz;
     const nvn_impl *im = (const nvn_impl *)getsectiondata(&_mh_execute_header, "__DATA", "swnvn", &sz);
     unsigned nim = im ? (unsigned)(sz / sizeof *im) : 0, hit = 0;
+#endif
     for (unsigned i = 0; i < NVN_NFUNC; i++) nvn_slot[i].fn = (void *)nvn_unimpl_entry;
     for (unsigned k = 0; k < nim; k++) {
         unsigned i = 0;
@@ -788,17 +810,33 @@ NVN(nvnVertexStreamStateSetDivisor, void, NVNvertexStreamState *s, int d) { ST(v
 
 static _Atomic uint64_t g_sub_wall_ns, g_sub_cpu_ns, g_sub_instr;   // 提交（不含出图）的墙钟 / 本线程 CPU 时间 / 本线程退休指令数（逐帧取走） | Wall clock / this thread's CPU time / this thread's retired instruction count for submit (excluding present) (taken away per frame)
 static _Atomic uint64_t g_cum_sub_instr, g_cum_sub_cpu_ns;   // 同上累计（每 300 帧汇总「翻译」行取差，真机经日志口读：每次绘制指令数 / 每帧提交 CPU） | Cumulative versions of the above (the 「翻译」(translation) summary row every 300 frames takes the difference; on a real device read through the log port: instructions per draw / submit CPU per frame)
+#ifdef __ANDROID__
+// Android 未启用性能计数器；不调用 Apple 私有接口。| Performance counters are disabled on Android; do not call Apple's private interface.
+static int thread_selfcounts(int type, void *buf, size_t nbytes) { (void)type; memset(buf, 0, nbytes); return -1; }
+#else
 extern int thread_selfcounts(int type, void *buf, size_t nbytes);   // 本线程累计 {指令, 周期}（libSystem 私有接口，Mac / iOS 都有） | This thread's cumulative {instructions, cycles} (libSystem private interface, present on both Mac and iOS)
+#endif
 static uint64_t thr_instr(void) { uint64_t c[2] = {0, 0}; thread_selfcounts(1, c, sizeof c); return c[0]; }
 // 提交路径的补充读数（真机 Metal 4 指令数 −18% 而提交 CPU 时间 +49%，要分清是内核态、执行效率还是被降频）：
 // 本线程周期数（同一接口的第二项）、内核态 CPU 时间（THREAD_BASIC_INFO）、墙钟
 // Supplementary readings for the submit path (on a real device Metal 4 instruction count is -18% while submit CPU time is +49%; need to tell apart kernel mode, execution efficiency, or frequency throttling):
 // this thread's cycle count (the second item of the same interface), kernel-mode CPU time (THREAD_BASIC_INFO), wall clock
 static void thr_counts(uint64_t *instr, uint64_t *cyc) { uint64_t c[2] = {0, 0}; thread_selfcounts(1, c, sizeof c); *instr = c[0]; *cyc = c[1]; }
+#ifdef __ANDROID__
+static _Atomic uint64_t g_sub_sys_unavailable;
+#endif
 static uint64_t thr_sys_ns(void) {
+#ifdef __ANDROID__
+    // 真实本线程系统 CPU；失败返回不可用，不能把缺失读数当成零或参与无符号差分。
+    // Read actual system CPU for this thread; unavailable readings are neither zero nor operands of an unsigned delta.
+    struct rusage usage;
+    if (getrusage(RUSAGE_THREAD, &usage)) return UINT64_MAX;
+    return (uint64_t)usage.ru_stime.tv_sec * 1000000000ull + (uint64_t)usage.ru_stime.tv_usec * 1000ull;
+#else
     thread_basic_info_data_t bi; mach_msg_type_number_t n = THREAD_BASIC_INFO_COUNT; mach_port_t me = mach_thread_self(); uint64_t r = 0;
     if (thread_info(me, THREAD_BASIC_INFO, (thread_info_t)&bi, &n) == KERN_SUCCESS) r = (uint64_t)bi.system_time.seconds * 1000000000ull + (uint64_t)bi.system_time.microseconds * 1000ull;
     mach_port_deallocate(mach_task_self(), me); return r;
+#endif
 }
 static _Atomic uint64_t g_cum_sub_cyc, g_cum_sub_sys_ns, g_cum_sub_wall_ns;
 static int frame_rec(void);
@@ -858,7 +896,15 @@ static void x_submit(const uint64_t *h, int n, uint64_t sub, uint64_t host) {
     uint64_t dw = now_ns() - t0;
     atomic_fetch_add(&g_nvn_ns, dw); atomic_fetch_add(&g_sub_wall_ns, dw);
     uint64_t i1, y1; thr_counts(&i1, &y1); uint64_t dc = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - c0, di = i1 - i0;
-    atomic_fetch_add(&g_cum_sub_cyc, y1 - y0); atomic_fetch_add(&g_cum_sub_sys_ns, thr_sys_ns() - s0); atomic_fetch_add(&g_cum_sub_wall_ns, dw);
+    atomic_fetch_add(&g_cum_sub_cyc, y1 - y0);
+#ifdef __ANDROID__
+    uint64_t s1 = thr_sys_ns();
+    if (s0 != UINT64_MAX && s1 != UINT64_MAX && s1 >= s0) atomic_fetch_add(&g_cum_sub_sys_ns, s1 - s0);
+    else atomic_fetch_add(&g_sub_sys_unavailable, 1);
+#else
+    atomic_fetch_add(&g_cum_sub_sys_ns, thr_sys_ns() - s0);
+#endif
+    atomic_fetch_add(&g_cum_sub_wall_ns, dw);
     atomic_fetch_add(&g_sub_cpu_ns, dc); atomic_fetch_add(&g_cum_sub_cpu_ns, dc);
     atomic_fetch_add(&g_sub_instr, di); atomic_fetch_add(&g_cum_sub_instr, di);
 }
@@ -1035,6 +1081,9 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
     uint64_t tk = *idx < 4 ? o->ticket[*idx] : 0;
     if (tk) { uint64_t w0 = now_ns(), rt = x_present_ticket(tk); if (rt) mtl_present_wait(rt); g_pq_wait_ns += now_ns() - w0; }   // tk 是翻译队列的出图任务号 | tk is the translation queue's present job number
     if (s) { ((sync_t *)s)->fenced = 1; ((sync_t *)s)->fence = x_fence(); }   // 交换链贴图在此前的提交完成后可用 | The swapchain texture becomes available once the commits before this point have completed
+#ifdef __ANDROID__
+    if(dm_android_performance_frame_begin)dm_android_performance_frame_begin(w,*idx<o->ntex?*idx:-1);
+#endif
     return NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS;
 }
 
@@ -1109,6 +1158,65 @@ void nvn_gpu_recent(double *avg, double *p95, unsigned *n) {
     qsort(v, c, sizeof *v, dcmp); *n = c; *avg = c ? s / c : -1; *p95 = c ? v[(c * 95) / 100 < c ? (c * 95) / 100 : c - 1] : -1;
 }
 static int dcmp(const void *a, const void *b) { double x = *(const double *)a, y = *(const double *)b; return (x > y) - (x < y); }
+#ifdef __ANDROID__
+// 与同一出图线程原有 yield getter 配对取基线；每个完整窗口只输出存在的 CPU / 墙钟读数。
+// Pair baselines with the existing yield getter on the same present thread; report only available CPU/wall readings per complete window.
+static void android_submit_stats(uint64_t frame) {
+    static uint64_t previous_frame,previous_cpu,previous_system,previous_wall,previous_yields,previous_yield_ns,previous_unavailable;
+    static uint64_t previous_mp_calls,previous_mp_pages,previous_mp_ns,previous_faults,previous_preps;
+    static dm_android_read_stats previous_reads;
+    uint64_t cpu = atomic_load(&g_cum_sub_cpu_ns), system = atomic_load(&g_cum_sub_sys_ns), wall = atomic_load(&g_cum_sub_wall_ns);
+    uint64_t unavailable = atomic_load(&g_sub_sys_unavailable), yields = 0, yield_ns = 0;
+    uint64_t mp_calls,mp_pages,mp_ns,faults,preps;
+    nvn_dirty_mp_stats(&mp_calls,&mp_pages,&mp_ns); nvn_dirty_stats(&faults,&preps);
+    dm_android_read_stats reads; dm_android_current_thread_read_stats(&reads);
+    dm_main_yield_stats(&yields, &yield_ns);
+    if (previous_frame && frame > previous_frame) {
+        double frames = (double)(frame - previous_frame);
+        if (unavailable == previous_unavailable)
+            LOG("[nvn-android-submit] frame=%llu span=%llu wall=%.3f cpu=%.3f kernel=%.3f ms/frame main_yield=%.1f/frame yield_wall=%.3f ms/frame kernel_source=getrusage(RUSAGE_THREAD)",
+                (unsigned long long)frame, (unsigned long long)(frame - previous_frame), (wall - previous_wall) / 1e6 / frames, (cpu - previous_cpu) / 1e6 / frames, (system - previous_system) / 1e6 / frames, (yields - previous_yields) / frames, (yield_ns - previous_yield_ns) / 1e6 / frames);
+        else
+            LOG("[nvn-android-submit] frame=%llu span=%llu wall=%.3f cpu=%.3f ms/frame kernel=unavailable failed_submits=%llu main_yield=%.1f/frame yield_wall=%.3f ms/frame",
+                (unsigned long long)frame, (unsigned long long)(frame - previous_frame), (wall - previous_wall) / 1e6 / frames, (cpu - previous_cpu) / 1e6 / frames, (unsigned long long)(unavailable - previous_unavailable), (yields - previous_yields) / frames, (yield_ns - previous_yield_ns) / 1e6 / frames);
+        // 已有全线程页面保护累计量；墙钟包含被调度开销，不能称为提交内核时间。
+        // Existing all-thread page-protection totals; elapsed time includes scheduling and is not submit kernel CPU.
+        LOG("[nvn-android-dirty] frame=%llu span=%llu scope=all_threads mprotect_calls=%.1f/frame pages=%.1f/frame mprotect_wall=%.3f ms/frame faults=%.1f/frame prepared_pages=%.1f/frame",
+            (unsigned long long)frame, (unsigned long long)(frame - previous_frame), (mp_calls - previous_mp_calls) / frames, (mp_pages - previous_mp_pages) / frames, (mp_ns - previous_mp_ns) / 1e6 / frames, (faults - previous_faults) / frames, (preps - previous_preps) / frames);
+        // 同一线程的所有真实安全读取，包含兼容层读者；不能冒充仅NVN或内核CPU。
+        // All actual safe reads on this thread, including compatibility readers; not exclusively NVN or kernel CPU.
+        if (reads.tid != previous_reads.tid)
+            LOG("[nvn-android-read] frame=%llu scope=current_thread_all_readers tid=%u counters=unavailable reason=thread_changed previous_tid=%u", (unsigned long long)frame, reads.tid, previous_reads.tid);
+        else {
+            uint64_t unavailable_reads = reads.wall_unavailable - previous_reads.wall_unavailable;
+            if (!unavailable_reads)
+                LOG("[nvn-android-read] frame=%llu span=%llu scope=current_thread_all_readers tid=%u calls=%.1f/frame requested=%.3f returned=%.3f MiB/frame full=%.1f partial=%.1f errors=%.1f per_frame read_wall=%.3f ms/frame",
+                    (unsigned long long)frame, (unsigned long long)(frame - previous_frame), reads.tid, (reads.calls - previous_reads.calls) / frames, (reads.requested_bytes - previous_reads.requested_bytes) / 1048576. / frames, (reads.returned_bytes - previous_reads.returned_bytes) / 1048576. / frames, (reads.full - previous_reads.full) / frames, (reads.partial - previous_reads.partial) / frames, (reads.errors - previous_reads.errors) / frames, (reads.wall_ns - previous_reads.wall_ns) / 1e6 / frames);
+            else
+                LOG("[nvn-android-read] frame=%llu span=%llu scope=current_thread_all_readers tid=%u calls=%.1f/frame requested=%.3f returned=%.3f MiB/frame read_wall=unavailable failed_measurements=%llu",
+                    (unsigned long long)frame, (unsigned long long)(frame - previous_frame), reads.tid, (reads.calls - previous_reads.calls) / frames, (reads.requested_bytes - previous_reads.requested_bytes) / 1048576. / frames, (reads.returned_bytes - previous_reads.returned_bytes) / 1048576. / frames, (unsigned long long)unavailable_reads);
+            LOG("[nvn-android-read-sizes] frame=%llu tid=%u scope=current_thread_all_readers buckets=0,1-64,65-256,257-1024,1025-4096,4097-65536,over65536 calls_per_frame=%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f",
+                (unsigned long long)frame, reads.tid, (reads.size_buckets[0] - previous_reads.size_buckets[0]) / frames, (reads.size_buckets[1] - previous_reads.size_buckets[1]) / frames, (reads.size_buckets[2] - previous_reads.size_buckets[2]) / frames, (reads.size_buckets[3] - previous_reads.size_buckets[3]) / frames, (reads.size_buckets[4] - previous_reads.size_buckets[4]) / frames, (reads.size_buckets[5] - previous_reads.size_buckets[5]) / frames, (reads.size_buckets[6] - previous_reads.size_buckets[6]) / frames);
+            // 重用同一次计时的尺寸分桶；精确区分少数大读取与大量小读取，不增加时钟调用。
+            // Reuse the same measurement in size buckets to separate large reads from many small reads without more clocks.
+            static const char *const bucket_names[DM_ANDROID_READ_SIZE_BUCKETS] = {"0","1-64","65-256","257-1024","1025-4096","4097-65536","over65536"};
+            for (unsigned bucket = 0; bucket < DM_ANDROID_READ_SIZE_BUCKETS; bucket++) {
+                uint64_t failed = reads.bucket_wall_unavailable[bucket] - previous_reads.bucket_wall_unavailable[bucket];
+                if (!failed)
+                    LOG("[nvn-android-read-bucket] frame=%llu span=%llu tid=%u scope=current_thread_all_readers bytes=%s calls=%.1f/frame requested=%.3f returned=%.3f MiB/frame wall=%.3f ms/frame",
+                        (unsigned long long)frame, (unsigned long long)(frame - previous_frame), reads.tid, bucket_names[bucket], (reads.size_buckets[bucket] - previous_reads.size_buckets[bucket]) / frames, (reads.bucket_requested_bytes[bucket] - previous_reads.bucket_requested_bytes[bucket]) / 1048576. / frames, (reads.bucket_returned_bytes[bucket] - previous_reads.bucket_returned_bytes[bucket]) / 1048576. / frames, (reads.bucket_wall_ns[bucket] - previous_reads.bucket_wall_ns[bucket]) / 1e6 / frames);
+                else
+                    LOG("[nvn-android-read-bucket] frame=%llu span=%llu tid=%u scope=current_thread_all_readers bytes=%s calls=%.1f/frame requested=%.3f returned=%.3f MiB/frame wall=unavailable failed_measurements=%llu",
+                        (unsigned long long)frame, (unsigned long long)(frame - previous_frame), reads.tid, bucket_names[bucket], (reads.size_buckets[bucket] - previous_reads.size_buckets[bucket]) / frames, (reads.bucket_requested_bytes[bucket] - previous_reads.bucket_requested_bytes[bucket]) / 1048576. / frames, (reads.bucket_returned_bytes[bucket] - previous_reads.bucket_returned_bytes[bucket]) / 1048576. / frames, (unsigned long long)failed);
+            }
+        }
+    }
+    previous_frame = frame; previous_cpu = cpu; previous_system = system; previous_wall = wall;
+    previous_yields = yields; previous_yield_ns = yield_ns; previous_unavailable = unavailable;
+    previous_mp_calls = mp_calls; previous_mp_pages = mp_pages; previous_mp_ns = mp_ns; previous_faults = faults; previous_preps = preps;
+    previous_reads = reads;
+}
+#endif
 static void tsummary(uint64_t frame) {
     char line[1024]; size_t o = 0;
     for (int k = 0; k < 6; k++) {
@@ -1129,6 +1237,9 @@ static void tsummary(uint64_t frame) {
       if (k) { qsort(v, k, sizeof *v, dcmp); LOG("[nvn] 上屏 至帧 %llu：%u 帧，掉帧 %u（丢弃 %u），间隔 p5 %.2f / p50 %.2f / p95 %.2f，p99 %.2f ms；footprint %.0f MiB；亮度 %.2f；温控 %d", frame, k + discard, drop, discard,
           v[(k * 5) / 100], v[k / 2], v[(k * 95) / 100 < k ? (k * 95) / 100 : k - 1], v[(k * 99) / 100 < k ? (k * 99) / 100 : k - 1], fp, br, dm_thermal_now()); }
       g_presn = 0; }
+#ifdef __ANDROID__
+    android_submit_stats(frame);
+#else
     { static uint64_t pi, pc, pd, pf; uint64_t ci = atomic_load(&g_cum_sub_instr), cc = atomic_load(&g_cum_sub_cpu_ns), ps_, dr_; mtl_stats(&ps_, &dr_);   // 翻译层 | translation layer
       if (pf && frame > pf && dr_ > pd) LOG("[nvn] 翻译 至帧 %llu：每次绘制 %.0f 条指令，每帧提交 %.2f M 条 / CPU %.3f ms，每帧绘制 %.0f", frame,
           (double)(ci - pi) / (double)(dr_ - pd), (ci - pi) / 1e6 / (double)(frame - pf), (cc - pc) / 1e6 / (double)(frame - pf), (double)(dr_ - pd) / (double)(frame - pf));
@@ -1150,6 +1261,7 @@ static void tsummary(uint64_t frame) {
                     oky ? yi.pth_curpri : -1, oky ? yi.pth_priority : -1, oky ? yi.pth_policy : -1, (unsigned)yq); } }
         py = cy; pk = ck; pw = cw; }
       pi = ci; pc = cc; pd = dr_; pf = frame; }
+#endif
     uint64_t up, re, fa, pr; mtl_pkg_stats(&up, &re); nvn_dirty_stats(&fa, &pr);
     LOG("[nvn] 预排布贴图 首传 %llu 张、池内容变化重传 %llu 次；写保护缺页 %llu 次、宿主写前解保护 %llu 页；漏检 %llu（累计）", up, re, fa, pr, mtl_pkg_miss());
     memset(g_tn, 0, sizeof g_tn);
@@ -1276,6 +1388,9 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     if (idx >= 0 && idx < o->ntex && idx < 4) {   // 只入队，立即返回；ticket 存翻译队列的任务号 | Enqueue only and return at once; ticket holds the translation queue's job number
         xjob j = {XJ_PRESENT, 0, NULL, snap_tex(o->tex[idx]), present_period(o) / 1e9}; memcpy(j.crop, o->crop, sizeof j.crop);
         o->ticket[idx] = x_push(&j); }
+#ifdef __ANDROID__
+    if(dm_android_performance_frame_end)dm_android_performance_frame_end(w,idx>=0&&idx<o->ntex&&idx<4?idx:-1);
+#endif
     gfx_leave();
     atomic_fetch_add(&g_nvn_ns, now_ns() - t0);
     uint64_t f = g_frame, ps, dr; mtl_stats(&ps, &dr);
@@ -1339,7 +1454,10 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
         plib = lib_; ppso = pso_;
         trow(f, "@t_s", (now_ns() - g_t0_ns) / 1e9);
         trow(f, "@drawable_ms", mtl_drawable_ns_take() / 1e6);
-        trow(f, "@sub_wall_ms", atomic_exchange(&g_sub_wall_ns, 0) / 1e6); trow(f, "@sub_cpu_ms", atomic_exchange(&g_sub_cpu_ns, 0) / 1e6); trow(f, "@sub_instr", (double)atomic_exchange(&g_sub_instr, 0));
+        trow(f, "@sub_wall_ms", atomic_exchange(&g_sub_wall_ns, 0) / 1e6); trow(f, "@sub_cpu_ms", atomic_exchange(&g_sub_cpu_ns, 0) / 1e6);
+#ifndef __ANDROID__
+        trow(f, "@sub_instr", (double)atomic_exchange(&g_sub_instr, 0));
+#endif
     } else atomic_store(&g_nvn_ns, 0);
     g_acq_wait_ns = g_pq_wait_ns = 0;
     if (f >= 8) { double g = mtl_gpu_ms(f - 8); if (g >= 0) { tpush(3, g); trow(f - 8, "@gpu_ms", g); g_hr[g_hn++ % HRN] = g; }   // GPU 时间滞后 8 帧取（已完成） | GPU time is taken 8 frames late (already completed)

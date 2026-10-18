@@ -7,12 +7,15 @@
 #include <signal.h>
 #include <dlfcn.h>
 #include <sys/ucontext.h>
+#include "dm_ucontext.h"
 #include <unistd.h>
 #include <sys/mman.h>
 #include <libkern/OSCacheControl.h>
 #include <mach/mach.h>
 #include <stdatomic.h>
 #include <time.h>
+#include <errno.h>
+#include <limits.h>
 
 static _Atomic uint64_t g_watch_last_ns;
 static _Atomic uint64_t g_watch_count;
@@ -120,6 +123,56 @@ void dm_guest_write_prep_register(void (*fn)(void *addr, size_t len)) {
 // Called before the host itself writes guest memory (read() straight into a guest buffer, etc.): for a system call a write-protected page does not trigger a page fault but returns EFAULT
 void dm_guest_write_prepare(void *addr, size_t len) { for (int i = 0; i < g_nwrite_prep; i++) g_write_prep[i](addr, len); }
 
+// 普通宿主写者共享锁跨过 prepare 和实际写；快照只尝试独占，不等待写者。
+// Ordinary host writers hold a shared lock across prepare and stores; snapshots only try exclusive access.
+// 信号缺页路径不使用此锁。锁内禁止等待 queue/GPU 或转调客体；顺序为 queue -> 此锁 -> 脏页锁。
+// Fault handlers never use this lock. No queue/GPU waits or guest callbacks while held; order: queue -> this lock -> dirty lock.
+static pthread_rwlock_t g_guest_host_write_lock = PTHREAD_RWLOCK_INITIALIZER;
+static _Thread_local unsigned g_guest_host_write_depth, g_guest_snapshot_depth;
+void dm_guest_host_write_begin(void *addr, size_t len) {
+    int saved_errno = errno;
+    if (g_guest_snapshot_depth) die("host write inside guest snapshot");
+    if (g_guest_host_write_depth == UINT_MAX) die("host write nesting overflow");
+    if (!g_guest_host_write_depth) {
+        int e = pthread_rwlock_rdlock(&g_guest_host_write_lock);
+        if (e) die("host write rdlock failed: %d", e);
+    }
+    g_guest_host_write_depth++;
+    dm_guest_write_prepare(addr, len);  // 每次 begin 恰好一次，包括嵌套 | Exactly once per begin, including nesting.
+    errno = saved_errno;
+}
+void dm_guest_host_write_end(void) {
+    int saved_errno = errno;
+    if (!g_guest_host_write_depth || g_guest_snapshot_depth) die("unpaired host write end");
+    if (!--g_guest_host_write_depth) {
+        int e = pthread_rwlock_unlock(&g_guest_host_write_lock);
+        if (e) die("host write unlock failed: %d", e);
+    }
+    errno = saved_errno;
+}
+int dm_guest_snapshot_try_begin(void) {
+    int saved_errno = errno;
+    if (g_guest_host_write_depth) { errno = saved_errno; return 0; }
+    if (g_guest_snapshot_depth == UINT_MAX) die("guest snapshot nesting overflow");
+    if (!g_guest_snapshot_depth) {
+        int e = pthread_rwlock_trywrlock(&g_guest_host_write_lock);
+        if (e == EBUSY) { errno = saved_errno; return 0; }
+        if (e) die("guest snapshot trywrlock failed: %d", e);
+    }
+    g_guest_snapshot_depth++;
+    errno = saved_errno;
+    return 1;
+}
+void dm_guest_snapshot_end(void) {
+    int saved_errno = errno;
+    if (!g_guest_snapshot_depth || g_guest_host_write_depth) die("unpaired guest snapshot end");
+    if (!--g_guest_snapshot_depth) {
+        int e = pthread_rwlock_unlock(&g_guest_host_write_lock);
+        if (e) die("guest snapshot unlock failed: %d", e);
+    }
+    errno = saved_errno;
+}
+
 // 诊断模块（diag.c 的探针）与线程现场（hle_thread.c）由各自注册进来：单测只链本文件时不依赖它们
 // The diagnostics module (the probes in diag.c) and the thread state dump (hle_thread.c) each register themselves here: a unit test that links only this file does not depend on them
 static int (*g_trap_hook)(ucontext_t *uc);
@@ -133,15 +186,15 @@ static void on_crash(int sig, siginfo_t *si, void *uc_) {
     ucontext_t *uc = uc_;
     if (sig == SIGTRAP && g_trap_hook && g_trap_hook(uc)) return;
     if (sig == SIGSEGV || sig == SIGBUS) {
-        int is_write = (int)((uc->uc_mcontext->__es.__esr >> 6) & 1);   // ESR 的 WnR 位 | The WnR bit of ESR
+        int is_write = dm_uc_is_write(uc);   // ESR 的 WnR 位 | The WnR bit of ESR
         for (int i = 0; i < g_nfault_hook; i++) if (g_fault_hook[i](si->si_addr, is_write, uc)) return;
     }
     fprintf(stderr, "[dm] CRASH sig=%d", sig);
-    off("addr", (uint64_t)si->si_addr); off("pc", uc->uc_mcontext->__ss.__pc); off("lr", uc->uc_mcontext->__ss.__lr);
-    fprintf(stderr, " sp=%#llx\n", uc->uc_mcontext->__ss.__sp);
-    for (int i = 0; i < 29; i++) fprintf(stderr, "x%d=%#llx%s", i, uc->uc_mcontext->__ss.__x[i], i % 6 == 5 ? "\n" : " ");
+    off("addr", (uint64_t)si->si_addr); off("pc", DM_UC_PC(uc)); off("lr", DM_UC_LR(uc));
+    fprintf(stderr, " sp=%#llx\n", (unsigned long long)DM_UC_SP(uc));
+    for (int i = 0; i < 29; i++) fprintf(stderr, "x%d=%#llx%s", i, (unsigned long long)DM_UC_REG(uc, i), i % 6 == 5 ? "\n" : " ");
     fprintf(stderr, "\n");
-    dm_backtrace(uc->uc_mcontext->__ss.__fp);
+    dm_backtrace(DM_UC_FP(uc));
     if (g_dump_hook) g_dump_hook();
     _exit(128 + sig);
 }

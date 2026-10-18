@@ -7,9 +7,20 @@
 #pragma once
 #include "dm.h"
 typedef struct { const char *name; void *fn; } hle_ent;
+#ifdef __ANDROID__
+// Android 用 ELF 节登记；条目对齐到指针大小，允许连续遍历。
+// Android registers ELF sections; pointer alignment permits contiguous iteration.
+#define DM_HLE_SECTION "dm_hle"
+#define DM_FORCE_SECTION "dm_force"
+#define DM_HLE_RETAIN retain,
+#else
+#define DM_HLE_SECTION "__DATA,swhle"
+#define DM_FORCE_SECTION "__DATA,swforce"
+#define DM_HLE_RETAIN
+#endif
 #define HLE(mangled, ret, cname, ...)                                                             \
     static ret cname(__VA_ARGS__);                                                                \
-    __attribute__((used, section("__DATA,swhle"))) static const hle_ent hle_ent_##cname = {mangled, (void *)cname}; \
+    __attribute__((used, DM_HLE_RETAIN section(DM_HLE_SECTION), aligned(sizeof(void *)))) static const hle_ent hle_ent_##cname = {mangled, (void *)cname}; \
     static ret cname(__VA_ARGS__)
 
 typedef uint32_t Result;   // nn::Result：w0，0 = 成功 | nn::Result: w0, 0 = success
@@ -22,6 +33,13 @@ void *objmap_get(const void *guest);
 void objmap_put(const void *guest, void *host);
 void *objmap_del(const void *guest);
 uint64_t now_ns(void);
+#ifdef __ANDROID__
+// 仅内部已持有、完整可写且与 source 不重叠的目的；非信号上下文，不初始化或分配。
+// Internal callers must own a fully writable destination nonoverlapping source; regular thread only, never initializes or allocates.
+// 1 = 在堆权限读锁持有期间复制完整范围；0 = 未写入，调用方必须回退安全 reader。两者保留 errno。
+// 1 = copied the full range under the heap permission read lock; 0 = wrote nothing, caller must use the safe reader. Both preserve errno.
+int dm_android_guest_heap_copy_owned(uintptr_t source, void *destination, size_t size);
+#endif
 uint64_t guest_ns(void);              // 客体时钟（hle_os.c；DM_TICK_HOLD 冻结时不走） | Guest clock (hle_os.c; does not advance while DM_TICK_HOLD is frozen)
 int dm_detclock_enabled(void);
 void dm_guest_clock_advanced(void);
@@ -39,7 +57,7 @@ void guest_clock_freeze_for(int reason, int on);   // 按原因冻结（1 后台
 typedef struct { const char *name; void *fn; const char *why; } hle_force_ent;
 #define HLE_FORCE(mangled, why, ret, cname, ...)                                                   \
     static ret cname(__VA_ARGS__);                                                                \
-    __attribute__((used, section("__DATA,swforce"))) static const hle_force_ent hle_force_##cname = {mangled, (void *)cname, why}; \
+    __attribute__((used, DM_HLE_RETAIN section(DM_FORCE_SECTION), aligned(sizeof(void *)))) static const hle_force_ent hle_force_##cname = {mangled, (void *)cname, why}; \
     static ret cname(__VA_ARGS__)
 
 // 运行模式（0 掌机 / 1 主机）：hle_oe.c 持有，hid 的手柄样式跟它走；前端可在运行中切换

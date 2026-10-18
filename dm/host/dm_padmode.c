@@ -154,6 +154,11 @@ static void notice_input_obs(const uint64_t *regs) {
 }
 void dm_padmode_boot(void) {   // 开机：游戏建面板之前（main.c，nnMain 前） | Boot: before the game builds its panels (main.c, before nnMain)
     if (gate_obs_present(OBS_NOTICE_INPUT)) gate_obs_set(OBS_NOTICE_INPUT, notice_input_obs);
+#ifdef __ANDROID__
+    // 未装触屏布局时实际使用原版手柄界面；前端自动导航也必须沿用该模式。
+    // Without touch layouts the original controller UI is active, so frontend navigation must use the same mode.
+    if (!getenv("DM_ROMFS_OVERLAY")) { g_cur = 1; atomic_store(&g_want, 1); LOG("[android] original controller layouts active; frontend navigation uses controller mode"); }
+#endif
     module_t *m = NULL; for (int i = 0; i < g_nmod; ++i) if (!strcmp(g_mod[i].name, "main")) m = &g_mod[i]; char mk[1100];
     if (!m || !getenv("DM_ROMFS_OVERLAY")) return;
     if (!dm_overlay_file("ctrl_touch", mk, sizeof mk)) { LOG("手柄 / 触屏布局：覆盖层没有 ctrl_touch 标记，照原版布局"); return; }

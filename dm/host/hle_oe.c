@@ -6,6 +6,10 @@
 // Environment switches: DM_OPMODE=0 handheld / 1 console (default 1, corresponding to the console-mode render profile); DM_LANG=language code (default zh-Hans).
 #include "dm_cursor.h"
 #include "hle.h"
+#ifdef __ANDROID__
+#include "../android/native/host_tls.h"
+#define pthread_setspecific dm_android_host_setspecific
+#endif
 #include "dm_uiscreen.h"
 
 // 运行模式是运行时状态（前端可改：iOS 过热降级切掌机）：唯一来源在此，启动时从 DM_OPMODE 取一次，之后不再读环境变量
@@ -206,6 +210,18 @@ static int scale3d_ctl_step(scale3d_ctl *c, double iv_ms, uint64_t now) {   // �
 static _Atomic int g_3d_quality_mode;
 void dm_3d_quality_mode_set(int mode) { atomic_store(&g_3d_quality_mode, mode == 1 ? 1 : 0); }
 int dm_3d_quality_mode_get(void) { return atomic_load(&g_3d_quality_mode); }
+// 游戏内菜单固定档位：-1 = 自动（动态控制器照旧），0 高质量 / 1 平衡 / 2 性能。定档期间动态控制器不插手，
+// 否则它会把玩家选的档又按帧率降下去；切回自动它立刻恢复工作。
+// Menu-pinned level: -1 = automatic (the dynamic controller keeps working), 0 high / 1 balanced / 2 performance.
+// While pinned the dynamic controller stays out of the way, otherwise it would lower the level the player just
+// picked; back on automatic it resumes at once.
+#define SCALE3D_BALANCED 0.85f
+static _Atomic int g_scale3d_forced = -1;
+void dm_3d_scale_set_preset(int preset) {
+    if (preset < -1 || preset > 2) return;
+    atomic_store(&g_scale3d_forced, preset);
+    LOG("3D 比例档位切到「%s」，下一拍生效", preset < 0 ? "自动" : preset == 0 ? "高质量" : preset == 1 ? "平衡" : "性能");
+}
 static _Atomic int g_scale3d_level;
 static _Atomic int g_scale3d_resumed;
 void dm_3d_scale_resumed(void) { atomic_store(&g_scale3d_resumed, 1); }   // 前端：刚回前台。回来头几秒的慢帧是恢复（表面重建、缓存变冷），不是 GPU 吃紧：停判 3 秒 | front end: just returned to foreground. Slow frames in the first few seconds back are recovery (surface rebuild, caches gone cold), not GPU pressure: suspend judging for 3 seconds
@@ -217,6 +233,7 @@ void dm_3d_scale_feed(double iv_ms) {   // 出图线程每帧调（diag.c dm_per
         for (int k = 0; k < S3_NLV; k++) if (g_s3_levels[k] >= fl - 1e-4f) c.max_level = k + 1;
         LOG("3D 比例控制：%s，下限 %.2f（第 %d 档）", on ? "开" : "关", c.max_level ? g_s3_levels[c.max_level - 1] : 0.0f, c.max_level); }
     if (!on) return;
+    if (atomic_load(&g_scale3d_forced) >= 0) return;   // 菜单定档期间动态控制器不插手 | while the menu has a level pinned, the dynamic controller stays out
     if (atomic_load(&g_3d_quality_mode) == 1) { if (c.level) { c.level = 0; LOG("3D 比例控制：画质优先，回到配置值"); } atomic_store(&g_scale3d_level, 0); return; }
     uint64_t now = now_ns();
     if (atomic_exchange(&g_scale3d_resumed, 0)) scale3d_ctl_hold(&c, now, 3 * S3_SEC);
@@ -243,12 +260,16 @@ static void scale3d_tick(void) {
     }
     int lv = atomic_load(&g_scale3d_level);   // 动态档：0 = 配置值，k = g_s3_levels[k − 1]（都不高于配置值） | Dynamic level: 0 = configured value, k = g_s3_levels[k − 1] (none higher than the configured value)
     float dyn = lv <= 0 ? want_cfg : g_s3_levels[(lv > S3_NLV ? S3_NLV : lv) - 1]; if (dyn > want_cfg) dyn = want_cfg;
+    int forced = atomic_load(&g_scale3d_forced);
+    if (forced >= 0) dyn = forced == 0 ? want_cfg : forced == 1 ? SCALE3D_BALANCED : 0.70f;
+    if (dyn > want_cfg) dyn = want_cfg;
     float want = dm_nvn_ruler_truth() ? 1.0f : dyn;
     if (want == cur || !main || dm_nvn_frame_count() < 30) return;
     uintptr_t renderer = *(uintptr_t *)(main->base + 0x31e0848); if (!renderer) return;
     uint32_t ow = *(uint32_t *)(renderer + 0xee88), oh = *(uint32_t *)(renderer + 0xee8c); if (!ow || !oh) return;
     { extern void mtl_rt_force_full(int) __attribute__((weak)); if (mtl_rt_force_full) mtl_rt_force_full(4); }   // 运行时外推：换比例前后几帧一律全画（主通道换尺寸那帧不能外推） | runtime extrapolation: the few frames before and after a scale change are all drawn in full (the frame where the main pass changes size cannot be extrapolated)
-    float *scale = (float *)(renderer + 0x66a4); dm_guest_write_prepare(scale, sizeof *scale); *scale = want;
+    float *scale = (float *)(renderer + 0x66a4);
+    dm_guest_host_write_begin(scale, sizeof *scale); *scale = want; dm_guest_host_write_end();
     ((void (*)(uint32_t, uint32_t))(main->base + 0x8582f0))(ow, oh);
     cur = want; atomic_store(&g_scale3d_cur, want);
     LOG("3D 渲染比例 %.2f：3D 目标 %ux%u，输出 %ux%u（帧 %llu）", want, *(uint32_t *)(renderer + 0xee78), *(uint32_t *)(renderer + 0xee7c),

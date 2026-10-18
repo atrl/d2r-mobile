@@ -11,9 +11,30 @@
 //       If the sound card cannot be opened (no output device etc.) it no longer exits: logs red, and this channel is consumed in real time by the silent sink while the game runs on.
 // The contents of AudioOut / AudioOutBuffer / AudioOutParameter are read and written only through the interfaces below; the host defines its own internal layout and writes only the front part of each struct.
 #include "hle.h"
-#include <AudioToolbox/AudioToolbox.h>
 #include <TargetConditionals.h>
+#ifdef __ANDROID__
+#include <aaudio/AAudio.h>
+#include <semaphore.h>
+#include <errno.h>
+typedef AAudioStream *AudioUnit;
+typedef int OSStatus;
+typedef sem_t *dispatch_semaphore_t;
+#define DISPATCH_TIME_FOREVER UINT64_MAX
+// 仅替换通知线程的计数信号量，回调不分配、不等待。
+// Replace only the notification thread's counting semaphore; callbacks neither allocate nor wait.
+static dispatch_semaphore_t dispatch_semaphore_create(long initial) {
+    sem_t *s = malloc(sizeof *s); if (!s) return NULL;
+    if (sem_init(s, 0, initial)) { free(s); return NULL; } return s;
+}
+static void dispatch_semaphore_signal(dispatch_semaphore_t s) { sem_post(s); }
+static void dispatch_semaphore_wait(dispatch_semaphore_t s, uint64_t timeout) {
+    (void)timeout; while (sem_wait(s) && errno == EINTR) {}
+}
+static void dispatch_release(dispatch_semaphore_t s) { sem_destroy(s); free(s); }
+#else
+#include <AudioToolbox/AudioToolbox.h>
 #include <dispatch/dispatch.h>
+#endif
 #include <stdatomic.h>
 #include <unistd.h>
 
@@ -38,6 +59,13 @@ typedef struct {
     pthread_t notify_th; _Atomic int notify_run, notify_pending, notify_armed;
     _Atomic uint64_t notify_ns;        // 最近一次「有缓冲释放、要通知」的时刻（量通知线程被叫醒的延迟） | Time of the most recent "buffer released, needs notifying" event (to measure the notification thread's wake-up latency)
     int dry;                           // 这次声卡回调里待播队列空了（在播放态）= 一次欠载（断音） | The pending playback queue was empty in this audio callback (while playing) = one underrun (audio dropout)
+#ifdef __ANDROID__
+    // 回调只累加真实输出计数，普通通知线程每 5 秒汇报，避免回调里写日志。
+    // Callbacks count actual output; the ordinary notifier reports every 5 seconds, avoiding callback logging.
+    _Atomic uint64_t render_frames, render_nonzero_samples, render_starved_frames;
+    _Atomic unsigned render_peak;
+    uint64_t report_ns;
+#endif
 } aout;
 
 // 打开中的输出登记表：前端生命周期（切后台）一次性暂停 / 恢复
@@ -92,6 +120,21 @@ static void *event_notify(void *p) {
             hle_signal_system_event(a->event);
         atomic_store_explicit(&a->notify_armed, 0, memory_order_release);
         if (!atomic_load_explicit(&a->notify_run, memory_order_acquire)) break;
+#ifdef __ANDROID__
+        uint64_t now = now_ns();
+        if (a->au && now - a->report_ns >= 5000000000ull) {
+            a->report_ns = now;
+            uint32_t qh = atomic_load_explicit(&a->q_head, memory_order_acquire);
+            uint32_t qt = atomic_load_explicit(&a->q_tail, memory_order_acquire);
+            LOG("[audio-output] state=%s device=%d frames=%llu nonzero_samples=%llu peak=%u starved_frames=%llu xruns=%d queued=%u",
+                AAudio_convertStreamStateToText(AAudioStream_getState(a->au)), AAudioStream_getDeviceId(a->au),
+                (unsigned long long)atomic_load_explicit(&a->render_frames, memory_order_relaxed),
+                (unsigned long long)atomic_load_explicit(&a->render_nonzero_samples, memory_order_relaxed),
+                atomic_load_explicit(&a->render_peak, memory_order_relaxed),
+                (unsigned long long)atomic_load_explicit(&a->render_starved_frames, memory_order_relaxed),
+                AAudioStream_getXRunCount(a->au), qt - qh);
+        }
+#endif
         if (atomic_load_explicit(&a->notify_pending, memory_order_acquire) &&
             atomic_exchange_explicit(&a->notify_armed, 1, memory_order_acq_rel) == 0)
             dispatch_semaphore_signal(a->notify_sem);
@@ -101,8 +144,9 @@ static void *event_notify(void *p) {
 
 // 从待播队列取 n 字节交给出声端；整块播完就挪到已释放并通知普通线程。
 // Take n bytes from the pending queue and hand them to the output side; once a whole block has played, move it to released and notify the ordinary thread.
-static void pull(aout *a, uint8_t *dst, uint64_t n) {
+static uint64_t pull(aout *a, uint8_t *dst, uint64_t n) {
     int released = 0;
+    uint64_t copied = 0;
     uint32_t qh = atomic_load_explicit(&a->q_head, memory_order_relaxed);
     while (n) {
         uint32_t qt = atomic_load_explicit(&a->q_tail, memory_order_acquire);
@@ -110,7 +154,7 @@ static void pull(aout *a, uint8_t *dst, uint64_t n) {
         gbuf *b = a->q[qh & (QMAX - 1)];
         uint64_t k = b->size - a->pos; if (k > n) k = n;
         memcpy(dst, (uint8_t *)b->ptr + a->pos, k);
-        dst += k; n -= k; a->pos += k;
+        dst += k; n -= k; a->pos += k; copied += k;
         if (a->pos >= b->size) {
             uint32_t rw = atomic_load_explicit(&a->rel_tail, memory_order_relaxed);
             uint32_t rr = atomic_load_explicit(&a->rel_head, memory_order_acquire);
@@ -123,6 +167,7 @@ static void pull(aout *a, uint8_t *dst, uint64_t n) {
         }
     }
     if (released) notify_release(a);
+    return copied;
 }
 
 static _Atomic uint64_t g_render_calls;   // 声卡回调累计（生命周期验证：恢复后须继续增长） | Cumulative sound card callbacks (lifecycle verification: must keep growing after resume)
@@ -141,6 +186,91 @@ static void downmix51(const int16_t *in, int16_t *out, unsigned frames) {
         int32_t l = (23170 * in[0] + 16384 * in[2] + 16384 * in[4]) >> 15, r = (23170 * in[1] + 16384 * in[2] + 16384 * in[5]) >> 15;
         out[0] = (int16_t)(l > 32767 ? 32767 : l < -32768 ? -32768 : l); out[1] = (int16_t)(r > 32767 ? 32767 : r < -32768 ? -32768 : r); }
 }
+#ifdef __ANDROID__
+static aaudio_data_callback_result_t au_render(AAudioStream *stream, void *ctx, void *data, int32_t frames) {
+    (void)stream; aout *a = ctx;
+    atomic_fetch_add_explicit(&g_render_calls, 1, memory_order_relaxed);
+    uint64_t copied = 0;
+    if (a->ch <= 2) copied = pull(a, data, (uint64_t)frames * a->ch * 2);
+    else {
+        // Switch 的 5.1 顺序 L/R/C/LFE/LS/RS 混到立体声，按小块取，回调不分配。
+        // Mix Switch 5.1 L/R/C/LFE/LS/RS to stereo in small chunks without callback allocations.
+        int16_t input[256 * 8], *output = data;
+        for (int32_t offset = 0; offset < frames;) {
+            int32_t count = frames - offset; if (count > 256) count = 256;
+            copied += pull(a, (uint8_t *)input, (uint64_t)count * a->ch * 2);
+            for (int32_t i = 0; i < count; ++i) {
+                const int16_t *p = input + i * a->ch;
+                for (int side = 0; side < 2; ++side) {
+                    int32_t sample = p[side];
+                    if (a->ch >= 3) sample += p[2] * 46341 / 65536;
+                    if (a->ch >= 4) sample += p[3] / 2;
+                    if (a->ch >= 6) sample += p[4 + side] * 46341 / 65536;
+                    if (a->ch >= 8) sample += p[6 + side] * 46341 / 65536;
+                    if (sample > 32767) sample = 32767; if (sample < -32768) sample = -32768;
+                    output[(offset + i) * 2 + side] = sample;
+                }
+            }
+            offset += count;
+        }
+    }
+    // 统计交给系统的 PCM，不生成或替换游戏采样；峰值 32768 代表 -32768。
+    // Measure PCM handed to the system without generating/replacing guest samples; 32768 represents -32768.
+    uint64_t nonzero = 0;
+    unsigned peak = 0;
+    const int16_t *samples = data;
+    for (uint64_t i = 0, n = (uint64_t)frames * (a->ch > 2 ? 2 : a->ch); i < n; ++i) {
+        int value = samples[i]; unsigned magnitude = value < 0 ? (unsigned)-value : (unsigned)value;
+        nonzero += value != 0;
+        if (magnitude > peak) peak = magnitude;
+    }
+    atomic_fetch_add_explicit(&a->render_frames, (uint64_t)frames, memory_order_relaxed);
+    atomic_fetch_add_explicit(&a->render_nonzero_samples, nonzero, memory_order_relaxed);
+    atomic_fetch_add_explicit(&a->render_starved_frames, (uint64_t)frames - copied / (a->ch * 2), memory_order_relaxed);
+    unsigned previous = atomic_load_explicit(&a->render_peak, memory_order_relaxed);
+    while (peak > previous && !atomic_compare_exchange_weak_explicit(&a->render_peak, &previous, peak, memory_order_relaxed, memory_order_relaxed)) {}
+    return AAUDIO_CALLBACK_RESULT_CONTINUE;
+}
+static void au_open(aout *a) {
+    AAudioStreamBuilder *builder = NULL;
+    if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK) die("AAudio builder failed");
+    AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
+    AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
+    AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
+    AAudioStreamBuilder_setSampleRate(builder, RATE);
+    if (a->ch < 1 || a->ch > 8) die("Unsupported guest audio channel count: %d", a->ch);
+    AAudioStreamBuilder_setChannelCount(builder, a->ch > 2 ? 2 : a->ch);
+    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setUsage(builder, AAUDIO_USAGE_GAME);
+    AAudioStreamBuilder_setDataCallback(builder, au_render, a);
+    aaudio_result_t result = AAudioStreamBuilder_openStream(builder, &a->au);
+    AAudioStreamBuilder_delete(builder);
+    if (result != AAUDIO_OK) die("AAudio open failed: %s", AAudio_convertResultToText(result));
+    if (AAudioStream_getSampleRate(a->au) != RATE || AAudioStream_getChannelCount(a->au) != (a->ch > 2 ? 2 : a->ch) ||
+        AAudioStream_getFormat(a->au) != AAUDIO_FORMAT_PCM_I16) die("AAudio negotiated an unsupported PCM format");
+    a->report_ns = now_ns();
+    LOG("[audio-output] opened device=%d rate=%d channels=%d format=%d burst=%d performance=%d",
+        AAudioStream_getDeviceId(a->au), AAudioStream_getSampleRate(a->au), AAudioStream_getChannelCount(a->au),
+        AAudioStream_getFormat(a->au), AAudioStream_getFramesPerBurst(a->au), AAudioStream_getPerformanceMode(a->au));
+}
+static OSStatus AudioOutputUnitStart(AudioUnit unit) { return AAudioStream_requestStart(unit); }
+static OSStatus AudioOutputUnitStop(AudioUnit unit) {
+    if (AAudioStream_getState(unit) == AAUDIO_STREAM_STATE_DISCONNECTED) return AAUDIO_OK;
+    aaudio_result_t result = AAudioStream_requestStop(unit);
+    if (result != AAUDIO_OK) return result;
+    // STOPPED 前不得让静音接收端接手，避免两个消费者同时取同一队列。
+    // The silent sink must not take over before STOPPED, preventing two concurrent consumers.
+    for (unsigned i = 0; i < 10; ++i) {
+        aaudio_stream_state_t state = AAudioStream_getState(unit), next;
+        if (state == AAUDIO_STREAM_STATE_STOPPED || state == AAUDIO_STREAM_STATE_DISCONNECTED) return AAUDIO_OK;
+        result = AAudioStream_waitForStateChange(unit, state, &next, 100000000);
+        if (result != AAUDIO_OK && result != AAUDIO_ERROR_TIMEOUT) return result;
+    }
+    die("AAudio stop timed out"); return AAUDIO_ERROR_TIMEOUT;
+}
+static void AudioUnitUninitialize(AudioUnit unit) { (void)unit; }
+static void AudioComponentInstanceDispose(AudioUnit unit) { AAudioStream_close(unit); }
+#else
 static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioTimeStamp *ts, UInt32 bus, UInt32 frames, AudioBufferList *bl) {
     (void)f; (void)ts; (void)bus; (void)frames;
     aout *a = ctx;
@@ -193,6 +323,7 @@ static int au_open(aout *a) {   // 0 = 声卡开好了；-1 = 开不了（a->au 
 #endif
     return 0;
 }
+#endif
 // 静音接收端：每 5 ms 按 48 kHz 实时消耗
 // Silent sink: consumes in real time at 48 kHz every 5 ms
 static void *null_sink(void *p) {
@@ -204,7 +335,15 @@ static void *null_sink(void *p) {
     }
     return NULL;
 }
-static int real_audio(void) { const char *e = getenv("DM_AUDIO"); return e ? atoi(e) != 0 : TARGET_OS_IPHONE; }
+static int real_audio(void) {
+    const char *e = getenv("DM_AUDIO");
+    if (e) return atoi(e) != 0;
+#ifdef __ANDROID__
+    return 1;
+#else
+    return TARGET_OS_IPHONE;
+#endif
+}
 
 // AudioOutParameter = { int32 sampleRate; uint16 channelCount; uint16 _r; ... }，0 = 系统默认（48 kHz / 2 声道）
 // AudioOutParameter = { int32 sampleRate; uint16 channelCount; uint16 _r; ... }, 0 = system default (48 kHz / 2 channels)
@@ -226,7 +365,14 @@ HLE_FORCE("_ZN2nn5audio12OpenAudioOutEPNS0_8AudioOutEPNS_2os11SystemEventEPKcRKN
     atomic_init(&a->rel_head, 0); atomic_init(&a->rel_tail, 0);
     atomic_init(&a->null_run, 0); atomic_init(&a->notify_run, 1);
     atomic_init(&a->notify_pending, 0); atomic_init(&a->notify_armed, 0);
+#ifdef __ANDROID__
+    atomic_init(&a->render_frames, 0); atomic_init(&a->render_nonzero_samples, 0);
+    atomic_init(&a->render_starved_frames, 0); atomic_init(&a->render_peak, 0);
+#endif
     a->notify_sem = dispatch_semaphore_create(0);
+#ifdef __ANDROID__
+    if (!a->notify_sem) die("Audio notification semaphore failed");
+#endif
     pthread_create(&a->notify_th, NULL, event_notify, a);
     if (ev) hle_bind_system_event(ev, 1);   // 缓冲释放事件：客体线程上绑内核事件（自动清除），之后由音频线程触发 | Buffer release event: bind a kernel event on the guest thread (auto-clear), afterwards signaled by the audio thread
     objmap_put(g, a);

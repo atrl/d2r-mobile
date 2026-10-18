@@ -13,6 +13,9 @@ uint64_t now_ns(void) { return 0; }
 // External dependencies of the 3D render scale (scale3d_tick): the unit test has no module table or graphics layer, so they are stubbed as "no main module" -> the function returns immediately
 module_t g_mod[MAX_MOD]; int g_nmod;
 void dm_guest_write_prepare(void *a, size_t n) { (void)a; (void)n; }
+// 本测试没有 renderer；只适配链接，真实 guard 由 actual-crash 夹具验证 | No renderer in this test; link adapter only, real guard covered by actual-crash fixture.
+void dm_guest_host_write_begin(void *a, size_t n) { dm_guest_write_prepare(a, n); }
+void dm_guest_host_write_end(void) {}
 uint64_t dm_nvn_frame_count(void) { return 0; }
 int dm_nvn_ruler_truth(void) { return 0; }
 int dm_ingame_now(void) { return 1; }
