@@ -20,6 +20,11 @@ public class GitHubDataTest {
         });
         server.createContext("/ignore", ex -> { ex.sendResponseHeaders(200, data.length); ex.getResponseBody().write(data); ex.close(); });
         server.createContext("/bad", ex -> { ex.getResponseHeaders().set("Content-Range", "bytes 0-2/3"); ex.sendResponseHeaders(206,3); ex.getResponseBody().write(new byte[3]); ex.close(); });
+        java.util.concurrent.atomic.AtomicInteger attempts = new java.util.concurrent.atomic.AtomicInteger();
+        server.createContext("/flaky", ex -> {
+            if (attempts.incrementAndGet() == 1) { ex.sendResponseHeaders(503,-1); ex.close(); return; }
+            ex.sendResponseHeaders(200,data.length); ex.getResponseBody().write(data); ex.close();
+        });
         server.start();
         File dir = Files.createTempDirectory("data-download-test").toFile();
         File file = new File(dir, "part");
@@ -43,7 +48,9 @@ public class GitHubDataTest {
             catch (IOException expected) {}
             File second = new File(dir,"second"); Files.write(file.toPath(),new byte[]{1,2}); Files.write(second.toPath(),new byte[]{3});
             try(InputStream in = GitHubData.open(new File[]{file,second})) { for(int n=1;n<=3;n++) if(in.read()!=n) throw new AssertionError("part order"); if(in.read()!=-1)throw new AssertionError(); }
-            second.delete();
+            second.delete(); file.delete();
+            GitHubData.fetchWithRetry(new URL(base+"/flaky"),file,data.length,hash.toString(),sink);
+            if (attempts.get()!=2) throw new AssertionError("transient failure not retried");
             System.out.println("Resume, ignored range, corrupt cache, invalid range, cancel, concatenation passed");
         } finally { server.stop(0); file.delete(); dir.delete(); }
     }

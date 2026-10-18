@@ -55,6 +55,16 @@ final class GitHubData {
             throw new IOException("Download checksum mismatch; retry to download again");
         }
     }
+    static void fetchWithRetry(URL url, File file, long size, String hash, Sink sink) throws Exception {
+        for (int attempt = 0; ; attempt++) {
+            try { fetch(url, file, size, hash, sink); return; }
+            catch (IOException error) {
+                check(sink);
+                if (attempt == 2) throw error;
+                Thread.sleep(1000L * (attempt + 1));
+            }
+        }
+    }
     static File[] download(File directory, Sink sink) throws Exception {
         if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Cannot create download folder");
         File[] parts = new File[4];
@@ -62,7 +72,7 @@ final class GitHubData {
             String suffix = String.format(Locale.ROOT, "%03d", i + 1);
             parts[i] = new File(directory, "d2r-package.zip." + suffix);
             final long base = i * 1900000000L;
-            fetch(new URL(BASE + suffix), parts[i], i == 3 ? 447543691L : 1900000000L, HASHES[i], new Sink() {
+            fetchWithRetry(new URL(BASE + suffix), parts[i], i == 3 ? 447543691L : 1900000000L, HASHES[i], new Sink() {
                 public boolean cancelled() { return sink.cancelled(); }
                 public void progress(long bytes) { sink.progress(base + bytes); }
             });
