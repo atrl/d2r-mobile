@@ -116,13 +116,12 @@ static void dependencies_prepare_copy_texture(const p_copy_b2t *copy) {
     int bw,bh;unsigned bpb=nvn_fmt_bpb(copy->tex->d.format,&bw,&bh);
     if(!bpb||bw<=0||bh<=0)die("Vulkan dependency texture copy format %#x",copy->tex->d.format);
     uint64_t pitch=((uint64_t)copy->r.width+bw-1)/bw*bpb,rows=((uint64_t)copy->r.height+bh-1)/bh;
-    uint64_t stride=state.copy_stride>0?(uint64_t)state.copy_stride:pitch,count=rows*(uint64_t)copy->r.depth;
-    if(stride<pitch)die("Vulkan dependency texture copy stride");
-    if(!count||count-1>(UINT64_MAX-pitch)/stride)die("Vulkan dependency texture copy range overflow");
-    if((count-1)*stride+pitch>UINTPTR_MAX-copy->src)die("Vulkan dependency texture source range overflow");
-    // 逐行检查真实读取，行间的 padding 不会无故触发同步。
-    // Check actual row reads; padding between rows does not unnecessarily force synchronization.
-    for(uint64_t i=0;i<count;i++)if(dependencies_unknown(copy->src+i*stride,pitch)){dependencies_flush(DEP_COPY_TEXTURE_SOURCE);return;}
+    size_t stride,image_stride,extent;
+    if(!nvn_copy_pitch(copy->r.width,copy->r.height,copy->r.depth,bw,bh,bpb,state.copy_stride,state.copy_image_stride,&stride,&image_stride,&extent))die("Vulkan dependency texture copy pitch");
+    if(extent>UINTPTR_MAX-copy->src)die("Vulkan dependency texture source range overflow");
+    for(int z=0;z<copy->r.depth;z++)for(uint64_t y=0;y<rows;y++)
+        if(dependencies_unknown(copy->src+z*image_stride+y*stride,pitch)){dependencies_flush(DEP_COPY_TEXTURE_SOURCE);return;}
+
 }
 
 static int dependencies_gpu_unknown(uintptr_t address,uint64_t size,uint64_t alignment);

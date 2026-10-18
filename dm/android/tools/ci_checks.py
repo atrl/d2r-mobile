@@ -125,7 +125,8 @@ def main():
         # Java with no Android APIs, and run here on the host JDK. The package side was added late: import used to
         # accept anything with at least one file per category, so a hollow package could pass and leave the game
         # unable to start.
-        for source, test, label in (("SaveArchive.java", "SaveArchiveTest", "存档包"),
+        for source, test, label in (("TouchPadState.java", "TouchPadStateTest", "Touch cancellation"),
+                                    ("SaveArchive.java", "SaveArchiveTest", "存档包"),
                                     ("PackageArchive.java", "PackageArchiveTest", "数据包导入")):
             if not (JAVAC.exists() and JAVA.exists()):
                 skipped.append("%s（%s）：没有项目 JDK（%s）" % (label, test, JAVAC))
@@ -143,6 +144,7 @@ def main():
 
         compile_and_run("Fold viewport and touch mapping", [ROOT / "tests/viewport_test.c"], workspace / "viewport",
                         ("-std=c11", "-Wall", "-Wextra", "-Werror", "-I", ROOT / "native"))
+        compile_and_run("Upstream texture copy pitch", [REPO / "dm/gfx/tests/t_copy_pitch.c"], workspace / "copy_pitch")
         python_check("Release signing contract", "dm/android/tests/test_release.py")
         hygiene()
         table_stubs()

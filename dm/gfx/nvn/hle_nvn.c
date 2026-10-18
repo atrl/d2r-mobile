@@ -1148,8 +1148,10 @@ __attribute__((weak)) double dm_brightness_now(void) { return -1; }
 __attribute__((weak)) void dm_perf_present(double iv_ms) { (void)iv_ms; }   // 缺省（单测）；宿主 diag.c 的强定义：常开性能记录 perf.txt | Default (unit tests); strong definition in the host's diag.c: always-on performance record perf.txt
 uint64_t dm_nvn_sub_cpu_ns(void) { return atomic_load(&g_cum_sub_cpu_ns); }   // 提交（不含出图）累计 CPU 纳秒 | Cumulative CPU nanoseconds of submit (excluding present)
 static uint64_t sub_cyc(void) { return atomic_load(&g_cum_sub_cyc); }
+#ifndef __ANDROID__
 extern uint64_t (*g_ub_sub_cpu_ns)(void), (*g_ub_sub_cyc)(void);
 __attribute__((constructor)) static void ub_sub_register(void) { g_ub_sub_cpu_ns = dm_nvn_sub_cpu_ns; g_ub_sub_cyc = sub_cyc; }   // 同进程交替测量（nvn_mtl.m ub_frame）按相取翻译 CPU / 周期 | In-process alternating measurement (nvn_mtl.m ub_frame) takes translation CPU / cycles per phase
+#endif
 __attribute__((weak)) int dm_thermal_now(void) { return -1; }   // 缺省（Mac）；iOS front_ios.m 覆盖   // 缺省（Mac）；iOS 前端 front_ios.m 的强定义覆盖它 | Default (Mac); overridden by iOS front_ios.m   // default (Mac); the strong definition in the iOS front end front_ios.m overrides it
 // 长帧日志的逐帧环（GPU 时间滞后 8 帧才有，所以先存后判）
 // Per-frame ring for the long-frame log (GPU time only arrives 8 frames late, so store first and judge later)

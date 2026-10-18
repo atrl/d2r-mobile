@@ -14,6 +14,7 @@
 #include <TargetConditionals.h>
 #ifdef __ANDROID__
 #include <aaudio/AAudio.h>
+#include <pthread/qos.h>
 #include <semaphore.h>
 #include <errno.h>
 typedef AAudioStream *AudioUnit;

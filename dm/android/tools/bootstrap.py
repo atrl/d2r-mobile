@@ -104,10 +104,12 @@ def install_package(item):
 def install_java():
     if (ROOT / "jdk/bin/java").exists():
         return
-    url = "https://api.adoptium.net/v3/assets/latest/17/hotspot?architecture=x64&image_type=jdk&os=linux"
-    response = subprocess.check_output(["curl", "--fail", "--silent", "--show-error", "--location",
-                                        "--retry", "3", "--max-time", "60", url])
-    package = json.loads(response)[0]["binary"]["package"]
+    package = {
+        "name": "OpenJDK17U-jdk_x64_linux_hotspot_17.0.20.1_1.tar.gz",
+        "link": "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.20.1%2B1/OpenJDK17U-jdk_x64_linux_hotspot_17.0.20.1_1.tar.gz",
+        "size": 193252603,
+        "checksum": "3808d1d15e3ec6bd5b84057fb5d84c33d8a1536a258146bcea2e603fc726e08e",
+    }
     path = download(package["link"], ROOT / "downloads" / package["name"], total=package["size"])
     if hashlib.file_digest(path.open("rb"), "sha256").hexdigest() != package["checksum"]:
         raise RuntimeError("JDK archive checksum mismatch")

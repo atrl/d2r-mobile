@@ -177,8 +177,11 @@ static void copy_buffer_texture(const p_copy_b2t *c) {
     dependencies_prepare_copy_texture(c);
     graphics_pass_end();image_entry *e=image_get(c->tex);image_upload(e);image_access(e,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);VkImageSubresourceRange range=texture_range(e,c->has_view?&c->view:NULL);
     int bw,bh;unsigned bpb=nvn_fmt_bpb(c->tex->d.format,&bw,&bh),pitch=(c->r.width+bw-1)/bw*bpb,rows=(c->r.height+bh-1)/bh;uint64_t bytes=(uint64_t)pitch*rows*c->r.depth;
-    uint64_t stride=state.copy_stride>0?state.copy_stride:pitch;if(stride<pitch)die("Vulkan texture copy stride");post_op *p=post_new(3);p->source=buffer_create(bytes);
-    for(int z=0;z<c->r.depth;z++)for(unsigned y=0;y<rows;y++)if(snapshot_read(c->src+(z*rows+y)*stride,(uint8_t*)p->source.mapped+(z*rows+y)*pitch,pitch))die("Vulkan texture copy source");
+    size_t stride,image_stride,extent;
+    if(!nvn_copy_pitch(c->r.width,c->r.height,c->r.depth,bw,bh,bpb,state.copy_stride,state.copy_image_stride,&stride,&image_stride,&extent))die("Vulkan texture copy pitch");
+    if(extent>UINTPTR_MAX-c->src)die("Vulkan texture copy range overflow");
+    post_op *p=post_new(3);p->source=buffer_create(bytes);
+    for(int z=0;z<c->r.depth;z++)for(unsigned y=0;y<rows;y++)if(snapshot_read(c->src+z*image_stride+y*stride,(uint8_t*)p->source.mapped+(z*rows+y)*pitch,pitch))die("Vulkan texture copy source");
     int is3d=c->tex->d.target==NVN_TEXTURE_TARGET_3D;VkBufferImageCopy copy={.imageSubresource={e->aspect,range.baseMipLevel,range.baseArrayLayer+(is3d?0:c->r.zoffset),is3d?1:c->r.depth},.imageOffset={c->r.xoffset,c->r.yoffset,is3d?c->r.zoffset:0},.imageExtent={c->r.width,c->r.height,is3d?c->r.depth:1}};
     vkCmdCopyBufferToImage(command,p->source.buffer,e->image,VK_IMAGE_LAYOUT_GENERAL,1,&copy);image_gpu_written(e);
 }

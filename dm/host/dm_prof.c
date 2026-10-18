@@ -4,8 +4,18 @@
 #include "hle.h"
 #include <stdlib.h>
 #include <string.h>
+#ifdef __ANDROID__
+static int thread_selfcounts(int type, void *buf, size_t nbytes) {
+    (void)type; memset(buf,0,nbytes); return -1;
+}
+#else
 extern int thread_selfcounts(int type, void *buf, size_t nbytes);
-int dm_ipf_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_PUMP_PROF"); on = e && strcmp(e, "0"); } return on; }
+#endif
+int dm_ipf_on(void) {
+#ifdef __ANDROID__
+    return 0; // Darwin instruction counters are unavailable.
+#endif
+ static int on = -1; if (on < 0) { const char *e = getenv("DM_PUMP_PROF"); on = e && strcmp(e, "0"); } return on; }
 uint64_t dm_ipf_instr(void) { uint64_t c[2] = { 0, 0 }; thread_selfcounts(1, c, sizeof c); return c[0]; }
 enum { NMOD = 48 };
 static struct { const char *name[NMOD]; uint64_t sum[NMOD], n_frames; int n; } g_t[2];

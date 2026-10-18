@@ -1,4 +1,5 @@
 #include "viewport.h"
+#include "../../gfx/nvn/nvn_copy_pitch.h"
 // NVN 命令执行的 Vulkan 后端。沿用上游 C 接口名以复用记录层。
 // Vulkan NVN command executor. Retain upstream C interface names to reuse the recorder.
 #include "../../host/dm.h"
@@ -133,6 +134,7 @@ static VkSemaphore *screen_present_wait;
 static uint64_t screen_acquire_ticket;
 static int screen_submission;
 static uint32_t screen_count;
+static int screen_invalidated;
 static pthread_once_t once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t pools_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -156,7 +158,7 @@ static struct {
     color_st color; chmask_st mask; blend_st blend[8]; ms_st multisample; poly_st polygon; ds_st depth;
     p_scissor scissor; p_viewports viewports; p_depth_range depth_range;
     VkStencilOpState stencil_faces[2]; p_poly_offset polygon_offset; p_blend_color blend_color;
-    const dpool_t *texture_pool, *sampler_pool; int64_t copy_stride;
+    const dpool_t *texture_pool, *sampler_pool; int64_t copy_stride, copy_image_stride;
 } state;
 uint64_t dm_android_nvn_time(void) { return dm_android_clock_ns(CLOCK_MONOTONIC); }
 int dm_nvn_ruler_truth(void) { return 0; }
@@ -256,6 +258,14 @@ void mtl_screen_detach(void) {
     screen_release();
     LOG("[android] 窗口销毁：表面与交换链已释放，进程保留");
 }
+// Called only while the graphics gate is exclusively held (or suspended).
+static void screen_replace(struct ANativeWindow *window) {
+    screen_release();
+    VkAndroidSurfaceCreateInfoKHR si = {.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR, .window = window};
+    VK_CHECK(vkCreateAndroidSurfaceKHR(instance, &si, NULL, &surface));
+    screen_create_swapchain(window);
+    screen_invalidated = 0;
+}
 void mtl_screen_attach(struct ANativeWindow *window) {
     // 同上：不在回调线程上初始化后端；后端还没活时，第一次出图会自己建好表面与交换链。
     // Same as above: never initialise the backend on the callback thread; when it is not live yet, the first
@@ -272,10 +282,7 @@ void mtl_screen_attach(struct ANativeWindow *window) {
     // left to the front end, which alone knows whether the app is in the foreground: this callback can arrive
     // either side of onResume.
     if (dm_gfx_suspend) dm_gfx_suspend(1);
-    screen_release();
-    VkAndroidSurfaceCreateInfoKHR si = {.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR, .window = window};
-    VK_CHECK(vkCreateAndroidSurfaceKHR(instance, &si, NULL, &surface));
-    screen_create_swapchain(window);
+    screen_replace(window);
     LOG("[android] 窗口重建：新的表面与交换链已就绪");
 }
 #endif
@@ -847,6 +854,7 @@ static void execute(const uint8_t *p, unsigned depth) {
             case OP_BIND_VSTREAM: { const p_bind_vstream *b = (const void *)a; if (b->first < 0 || b->n < 0 || b->first + b->n > 16) die("NVN vertex stream bounds"); memcpy(state.streams + b->first, b->st, b->n * sizeof *state.streams); break; }
             case OP_BIND_VBUF: { const p_bind_vbuf *b = (const void *)a; if (b->first < 0 || b->n < 0 || b->first + b->n > 16) die("NVN vertex buffer bounds"); memcpy(state.vertices + b->first, b->r, b->n * sizeof *state.vertices); break; }
             case OP_COPY_STRIDE: state.copy_stride = ((const p_copy_stride *)a)->stride; break;
+            case OP_COPY_IMAGE_STRIDE: state.copy_image_stride = ((const p_copy_stride *)a)->stride; break;
             case OP_BLEND_COLOR: state.blend_color = *(const p_blend_color *)a; break;
             case OP_POLY_OFFSET: state.polygon_offset = *(const p_poly_offset *)a; break;
             case OP_STENCIL: { const p_stencil *s = (const void *)a; for (int i = 0; i < 2; ++i) if (s->face & (1 << i)) { if (s->which == 0) state.stencil_faces[i].compareMask = s->value_mask; else if (s->which == 1) state.stencil_faces[i].writeMask = s->mask; else state.stencil_faces[i].reference = s->ref; } break; }
@@ -918,6 +926,13 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
     dm_cpu_phase_end(DM_CPU_PHASE_WAIT_PRIOR,previous_start);
     uint64_t ticket=++presents;graphics_probe_capture(ticket);
     if(!(ticket%60))LOG("[vulkan-prior-acquire] frame=%llu queued=%llu prior_consumer=%llu wait=%.3f ms scope=prior_binary_acquire_consumer current_guest_publication=async",(unsigned long long)ticket,(unsigned long long)completion_ticket,(unsigned long long)previous_acquire,previous_acquire_ns/1e6);
+#ifdef __ANDROID__
+    if (screen_invalidated) {
+        ANativeWindow *window = front_metal_layer();
+        if (!window || ANativeWindow_getWidth(window)<=0 || ANativeWindow_getHeight(window)<=0) return completion_ticket;
+        screen_replace(window);
+    }
+#endif
     if (swapchain) {
         // 前次 blit 已消费 acquire token；当前帧通过独立返回的真实票号追踪完成。
         // The prior blit consumed the acquire token; a separate returned GPU ticket tracks this frame's completion.
@@ -926,7 +941,12 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
         uint32_t index; VkResult result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, screen_acquired, VK_NULL_HANDLE, &index);
         acquire_ns=dm_android_clock_ns(CLOCK_MONOTONIC)-acquire_start;
         dm_cpu_phase_end(DM_CPU_PHASE_ACQUIRE,acquire_start);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_ERROR_SURFACE_LOST_KHR) {
+            screen_invalidated = 1;
+            return completion_ticket; // No acquire semaphore was signalled; retry on the next frame.
+        }
         if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) die("Vulkan acquire: %d", result);
+        if (result == VK_SUBOPTIMAL_KHR) screen_invalidated = 1;
         if(index>=screen_count)die("Vulkan acquire image bounds");screen_rendered=screen_present_wait[index];
         uint64_t blit_phase=dm_cpu_phase_begin();
         mtl_sub_begin(); image_entry *e = image_get(t); image_access(e,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT);
@@ -951,7 +971,10 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
         uint64_t present_start=dm_android_clock_ns(CLOCK_MONOTONIC);present_lock_ns=present_start-present_lock_start;
         result = vkQueuePresentKHR(queue, &pi);present_ns=dm_android_clock_ns(CLOCK_MONOTONIC)-present_start;
         dm_cpu_phase_end(DM_CPU_PHASE_PRESENT,present_lock_start);
-        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) die("Vulkan present: %d", result); pthread_mutex_unlock(&queue_lock);
+        pthread_mutex_unlock(&queue_lock);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_ERROR_SURFACE_LOST_KHR || result == VK_SUBOPTIMAL_KHR)
+            screen_invalidated = 1;
+        else if (result != VK_SUCCESS) die("Vulkan present: %d", result);
         if(ticket<=3||!(ticket%600))LOG("[vulkan-present] frame=%llu image=%u submit=%llu completed=%llu semaphore_per_image=1 queue_idle=0",(unsigned long long)ticket,index,(unsigned long long)screen_acquire_ticket,(unsigned long long)atomic_load(&completed));
         if (ticket <= 3 || ticket == 30) LOG("[vulkan] Android game frame %llu presented", (unsigned long long)ticket);
     }
@@ -1089,3 +1112,11 @@ void dm_gfx_shot_at(long frame, const char *path) { (void)frame; dm_shot_written
 // Metal host drawing overrides have no Vulkan equivalent yet.
 uint64_t mtl_host_latch(void) { return 0; }
 void mtl_host_apply(uint64_t value) { (void)value; }
+
+#include "../../gfx/nvn/nvn_pace.h"
+double mtl_display_refresh(void) { return mtl_display_hz(); }
+double dm_pace_hz(double screen_hz, double floor_hz) { return nvn_pace_hz(screen_hz,floor_hz); }
+double front_display_refresh(char *name, size_t n) {
+    if(name && n) snprintf(name,n,"Android display");
+    return mtl_display_hz();
+}
