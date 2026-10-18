@@ -107,11 +107,15 @@ final class PackageArchive {
         Declaration read(byte[] manifest) throws IOException;
     }
 
-    // 九个必需文件：三个模块，每个配一份 fixups 与一份 gates。
-    // The nine required files: three modules, each with a fixups and a gates layout.
-    static List<String> requiredModules() {
+    // main/sdk 必需；可选 subsdk0 必须同时包含两份布局。
+    // main/sdk are required. Optional subsdk0 must include both layouts.
+    static List<String> requiredModules(File directory) {
+        boolean movie = new File(directory, "libdmguest_subsdk0.so").exists()
+            || new File(directory, "subsdk0.fixups.tsv").exists()
+            || new File(directory, "subsdk0.gates.tsv").exists();
         List<String> names = new ArrayList<>();
         for (String module : MODULE_NAMES) {
+            if (module.equals("subsdk0") && !movie) continue;
             names.add("libdmguest_" + module + ".so");
             for (String kind : LAYOUT_KINDS) names.add(module + "." + kind + ".tsv");
         }
@@ -224,7 +228,7 @@ final class PackageArchive {
             if (romfs == 0) missing.add("romfs/");
             if (shaders == 0) missing.add("shaders/");
             if (game == 0) missing.add("game/");
-            for (String name : requiredModules()) {
+            for (String name : requiredModules(staging)) {
                 File file = new File(staging, name);
                 // 布局文件允许是空的（subsdk0.gates.tsv 本来就是 0 字节），模块本体不能是空的。
                 // A layout file may be empty (subsdk0.gates.tsv really is 0 bytes); a module itself may not.

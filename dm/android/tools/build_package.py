@@ -25,6 +25,17 @@ FIXED_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 # 包里必须齐全的东西：缺任何一项都不能算一个可用的包。
 GAME_MODULES = ("libdmguest_main.so", "libdmguest_sdk.so", "libdmguest_subsdk0.so")
 GAME_LAYOUTS = tuple(f"{name}.{kind}.tsv" for name in ("main", "sdk", "subsdk0") for kind in ("fixups", "gates"))
+OPTIONAL_GAME = ("libdmguest_subsdk0.so", "subsdk0.fixups.tsv", "subsdk0.gates.tsv")
+
+
+def required_game_files(present):
+    """main/sdk are required; subsdk0 must be wholly present or wholly absent.
+    main/sdk 必需；subsdk0 必须完整存在或完全不存在。
+    """
+    return tuple(n for n in GAME_MODULES + GAME_LAYOUTS
+                 if n not in OPTIONAL_GAME or any(p in present for p in OPTIONAL_GAME))
+
+
 ROMFS_EXTENSIONS = (".data", ".psv")
 
 
@@ -41,10 +52,11 @@ def require_directory(path, label):
 def collect_game(directory):
     """模块与布局文件必须齐全，缺一个就报错——半个模块的包在手机上只会崩。"""
     require_directory(directory, "game")
-    for name in GAME_MODULES + GAME_LAYOUTS:
+    names = required_game_files({p.name for p in directory.iterdir()})
+    for name in names:
         if not (directory / name).is_file():
             raise PackageError(f"game directory is missing {name}")
-    return sorted(GAME_MODULES + GAME_LAYOUTS)
+    return sorted(names)
 
 
 def collect_romfs(directory):
@@ -65,7 +77,16 @@ def collect_romfs(directory):
     entries = sorted(p for p in data.rglob("*") if p.is_file())
     if not entries:
         raise PackageError(f"romfs data/ is empty: {data}")
-    return entries
+    # The community overlay needs both its marker and touch wording sidecar.
+    # 社区覆盖层需要同时保留触控标记与文字旁路表。
+    touch = [directory / name for name in ("ctrl_touch", "touch_strings.tsv")]
+    if any(path.exists() for path in touch):
+        if not all(path.is_file() and path.stat().st_size for path in touch):
+            raise PackageError("touch overlay requires ctrl_touch and touch_strings.tsv")
+        entries.extend(touch)
+    textbox = directory / "dm_textbox_plain.tsv"
+    if textbox.is_file(): entries.append(textbox)
+    return sorted(entries)
 
 
 def collect_shaders(directory):
@@ -173,7 +194,7 @@ def assemble(output, game, romfs, shaders, derived=None, note=None, quiet=False)
         for name in game_files:
             write_entry(archive, game / name, f"game/{name}", progress)
         for path in romfs_files:
-            write_entry(archive, path, f"romfs/data/{path.name}", progress)
+            write_entry(archive, path, f"romfs/{path.relative_to(romfs).as_posix()}", progress)
         for path in shader_files:
             write_entry(archive, path, f"shaders/{path.name}", progress)
         if derived is not None:

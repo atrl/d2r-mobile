@@ -154,6 +154,18 @@ public final class PackageArchiveTest {
         check(new File(good, "assets/derived.tsv").isFile(), "包根的 derived.tsv 被接受");
         check(new File(good, "modules/subsdk0.gates.tsv").isFile(), "空的布局文件也照收（subsdk0.gates.tsv 本来就是 0 字节）");
 
+        // Two-module community input; a partially supplied third module still fails.
+        // 双模块社区输入可导入；第三模块不完整时仍拒绝。
+        File two = tempDir("two-modules");
+        String[] twoEntries = java.util.Arrays.stream(complete()).filter(n -> !n.contains("subsdk0")).toArray(String[]::new);
+        counts = unpack(packageZip(manifest(1, 6, 2, 3), twoEntries), new File(two, "assets"), new File(two, "modules"));
+        check(counts.game == 6, "双模块包被接受");
+        String[] partial = java.util.Arrays.copyOf(twoEntries, twoEntries.length + 1);
+        partial[partial.length - 1] = "game/subsdk0.gates.tsv";
+        File brokenMovie = tempDir("partial-movie");
+        check("dmAndroidLaunchImportIncomplete".equals(refusal(packageZip(manifest(1, 7, 2, 3), partial),
+            new File(brokenMovie, "assets"), new File(brokenMovie, "modules"))), "第三模块不完整时拒绝");
+
         // 2. 没给 derived.tsv 的包照样能导入（老包不该被拒）。
         File noDerived = tempDir("noderived");
         String[] without = new String[complete().length - 1];

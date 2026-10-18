@@ -2,13 +2,17 @@
 
 [English](ANDROID_DISTRIBUTION.md)
 
-## GitHub 调查（2026-10-18）
+## preview.6 安装
 
-- [sydeEvans/d2r-android](https://github.com/sydeEvans/d2r-android/releases/tag/v0.6.1)：公开 APK 约 19 MB，配套 ZIP 是电脑打包工具，不是游戏数据。
-- [jiayx/d2r-mobile-build](https://github.com/jiayx/d2r-mobile-build)：有社区预处理输入方案。[格式说明](https://github.com/jiayx/d2r-mobile-build/blob/main/docs/PREPARED_INPUT.md)里的 source-payload.zip 包含 Apple 程序及 Metal 库，不能直接导入 Android；资源另外分发。没有下载或验证其中游戏内容，也没有将其重新发布到本 fork。
-- wdjwxh/D2R-Mobile-Android、akari-sora/d2r-mobile、MrCKR/d2r-android-adapter、gbcmikeblue/d2r-android、vickwv/d2r-mobile：本轮 GitHub Releases API 没有返回公开发布包。这不等于其外部渠道也没有包。
+下载发布页的 `D2R-Android-port.apk`，安装后选择 **下载游戏数据**。应用直接从固定 GitHub 发布下载约 6.15 GB 数据，逐卷校验 SHA-256，再自动导入，无需电脑、手动下载分卷或合并。首次预留 13 GB 空间，建议 Wi-Fi，并保持应用在前台；下载期间保持屏幕唤醒。再次点击下载可取消，之后可续传。导入完成后自动清除下载缓存。
 
-本轮没有找到并验证能直接用于本 fork 的完整 Android 数据包。社区已经打包，不代表其 iOS 程序和着色器可以在 Android 使用。这里提供整合流程，不宣称已经交付包含游戏的完整安装包。
+APK 与数据分开发行，升级 APK 保留已导入的数据及存档。数据固定引用 preview.5 的四个附件及校验值，避免 APK 发布时重复上传和下载大包；不能删除这个数据发布。后续数据兼容变化需要新版应用切换数据版本，不会自动覆盖现有游戏数据。
+
+目前是兼容性测试版本：Android 15 模拟器已完成 ARM64 安装和完整数据导入，已创建角色进入营地并验证摇杆移动；战斗、长期稳定性与 vivo 折叠屏实机尚未验证。参见 [转换记录](research/apple-guest-input.md)。
+
+## 社区输入
+
+原始社区资源约 5.42 GB，包含游戏资源但没有 Android 可执行模块及 SPIR-V 缓存。已将社区 Apple 模块重新定向、转换着色器并组装 Android 候选包；结果以转换记录为准。Git 源码与 CI 构建不包含游戏资源，下载数据通过独立发布附件分发。
 
 ## 本地生成一份安装整合包
 
@@ -23,7 +27,7 @@ python3 dm/android/tools/make_install_bundle.py \
 
 工具验证 APK 的发布签名、Android 数据包结构、必需文件、清单计数/大小和 CRC，再流式生成支持大文件的 Zip64 安装套件：APK、数据 ZIP、安装说明、SHA256SUMS。不会执行游戏或验证其场景兼容性。缺少数据、iOS 包、错误签名会失败；不会用空占位数据伪装完整包。需要额外空间保存整合包；不覆盖已有输出。
 
-手机先解压整合包、安装 APK，再用启动器导入其中的 `d2r-package.zip`。这是单个下载归档，不是把数 GB 游戏资源塞进 APK；Android 的可执行模块和大容量数据仍按现有导入流程分开放置。游戏内容留在本机；公开 CI/Release 继续只发布程序和工具。
+手机先解压整合包、安装 APK，再用启动器导入其中的 `d2r-package.zip`。这是单个下载归档，不是把数 GB 游戏资源塞进 APK；Android 的可执行模块和大容量数据仍按现有导入流程分开放置。该本地工具仍可用于离线整合；普通用户直接使用应用内下载即可。
 
 ## 手机检查更新
 

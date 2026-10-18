@@ -1,0 +1,104 @@
+{
+  "source_sha256": "428a6d05da368e8463a7f57067c58d39aa2a85e5f69c0a5a75bbe4b0243a17dd",
+  "source_bytes": 69753472,
+  "android_ready": false,
+  "original_nso_recovered": false,
+  "modules": {
+    "main": {
+      "patch_offset": 52559872,
+      "regions": [
+        [
+          16384,
+          28819456
+        ],
+        [
+          37797888,
+          23740416
+        ],
+        [
+          28835840,
+          1818624
+        ]
+      ],
+      "apple_thread_register_candidates": 25127,
+      "bytes": 54378496,
+      "sha256": "30384eabe394cbc6b6a0b7f3788983d58dc14a92b7abe1638853dc4833cf81f1"
+    },
+    "sdk": {
+      "patch_offset": 13893632,
+      "regions": [
+        [
+          30654464,
+          5832704
+        ],
+        [
+          61538304,
+          8060928
+        ],
+        [
+          36487168,
+          1310720
+        ]
+      ],
+      "apple_thread_register_candidates": 12085,
+      "bytes": 15204352,
+      "sha256": "d48f2cc33f3e506d623f873ba447c88fe0aea989b98c4057e2481b6ca3988fa2"
+    }
+  },
+  "embedded_shader_probe": [
+    {
+      "offset": "0x1db3884",
+      "expected_key": "96757bb36a024b91",
+      "actual_key": "96757bb36a024b91",
+      "code_header_found": true
+    },
+    {
+      "offset": "0x1db4418",
+      "expected_key": "a7672f1d3bfeb7d0",
+      "actual_key": "a7672f1d3bfeb7d0",
+      "code_header_found": true
+    },
+    {
+      "offset": "0x1db4eac",
+      "expected_key": "8ac93c54cfb3cbe3",
+      "actual_key": "8ac93c54cfb3cbe3",
+      "code_header_found": true
+    },
+    {
+      "offset": "0x1db5840",
+      "expected_key": "0d721a0acc36c0bf",
+      "actual_key": "0d721a0acc36c0bf",
+      "code_header_found": true
+    },
+    {
+      "offset": "0x1db63d4",
+      "expected_key": "96757bb36a024b91",
+      "actual_key": "96757bb36a024b91",
+      "code_header_found": true
+    },
+    {
+      "offset": "0x1db7468",
+      "expected_key": "7c603a02d455070a",
+      "actual_key": "7c603a02d455070a",
+      "code_header_found": true
+    },
+    {
+      "counter_offset": "0x1df10e8",
+      "control_magic_ok": true
+    },
+    {
+      "counter_offset": "0x1df1a94",
+      "control_magic_ok": true
+    },
+    {
+      "counter_offset": "0x1df2440",
+      "control_magic_ok": true
+    },
+    {
+      "counter_offset": "0x1df2dec",
+      "control_magic_ok": true
+    }
+  ],
+  "source_release": "https://github.com/jiayx/d2r-mobile-build/releases/tag/v1.0.18-build.10.1",
+  "rea_operation": "rea-agents@6.5.0 inspect-artifact: format inventory and SHA-256 only; no function-level analysis"
+}

@@ -234,6 +234,14 @@ static void *boot(void *argument) {
         // /storage/emulated) and dlopen from there fails. The bulk assets stay external, where the gigabytes fit.
         snprintf(metadata,sizeof metadata,"%s/d2r-package/game",s->activity->internalDataPath);mkdir(metadata,0700);
         snprintf(path,sizeof path,"%s/d2r-package/romfs",s->activity->externalDataPath);setenv("DM_ROMFS",path,1);
+        // A merged touch overlay is also the source for host-side markers/tables.
+        // 合并后的触控覆盖层同时提供宿主读取的标记与旁路表。
+        char touch_marker[1400];snprintf(touch_marker,sizeof touch_marker,"%s/ctrl_touch",path);
+        if(access(touch_marker,R_OK)==0){
+            char touch_strings[1400];snprintf(touch_strings,sizeof touch_strings,"%s/touch_strings.tsv",path);
+            if(access(touch_strings,R_OK)!=0)die("Touch overlay is missing touch_strings.tsv");
+            setenv("DM_ROMFS_OVERLAY",path,1);
+        }else unsetenv("DM_ROMFS_OVERLAY");
         snprintf(path,sizeof path,"%s/d2r-package/shaders",s->activity->externalDataPath);setenv("DM_VK_SHADERS",path,1);
         // 模块目录单独一个变量：DM_ANDROID_LIBDIR 归图形驱动找 hook 库用，见 loader.c 的说明。
         // A separate variable for the module directory: DM_ANDROID_LIBDIR belongs to the graphics driver's hook
@@ -286,7 +294,17 @@ static void *boot(void *argument) {
     // tables stay empty and a red line says so (nothing is invented).
     { void dm_hud_exp_load(void); void dm_vault_load(void); void dm_bright_load(void);
       dm_hud_exp_load(); dm_vault_load(); dm_bright_load(); }
-    char *args[]={"dmhost-android",metadata,"main","sdk","subsdk0",NULL};int dm_main(int,char**);dm_main(5,args);ANativeActivity_finish(s->activity);return NULL;
+    // Community Guest inputs contain main/sdk; movie calls use the host HLE.
+    // 社区 Guest 输入只有 main/sdk；电影调用由宿主 HLE 接管。
+    const char *guest_library=getenv("DM_GUEST_LIBDIR");if(!guest_library)guest_library=library;
+    char movie_path[1400];snprintf(movie_path,sizeof movie_path,"%s/libdmguest_subsdk0.so",guest_library);
+    int movie_library=access(movie_path,R_OK)==0;
+    snprintf(movie_path,sizeof movie_path,"%s/subsdk0.fixups.tsv",metadata);int movie_fixups=access(movie_path,R_OK)==0;
+    snprintf(movie_path,sizeof movie_path,"%s/subsdk0.gates.tsv",metadata);int movie_gates=access(movie_path,R_OK)==0;
+    if((movie_library||movie_fixups||movie_gates)&&!(movie_library&&movie_fixups&&movie_gates))die("Incomplete subsdk0 module");
+    char *args[]={"dmhost-android",metadata,"main","sdk",movie_library?"subsdk0":NULL,NULL};
+    LOG("[android] loading %d guest modules",movie_library?3:2);
+    int dm_main(int,char**);dm_main(movie_library?5:4,args);ANativeActivity_finish(s->activity);return NULL;
 }
 void front_run(void (*guest)(void)) {void mtl_init(void);mtl_init();game_app *s=application;if(!pthread_create(&s->debug_thread,NULL,progress_watch,s))s->debug_started=1;guest();}
 void *front_metal_layer(void) {if(!application)return NULL;pthread_mutex_lock(&application->lock);ANativeWindow *w=application->window;pthread_mutex_unlock(&application->lock);return w;}

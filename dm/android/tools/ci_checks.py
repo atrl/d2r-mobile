@@ -110,6 +110,9 @@ def main():
         # The version mapping: Android refuses an install whose version code goes backwards, so it needs a regression.
         python_check("APK 版本折算（test_version）", "dm/android/tests/test_version.py")
         python_check("Install bundle", "dm/android/tests/test_install_bundle.py")
+        python_check("Apple guest recovery", "dm/android/tests/test_apple_guest.py")
+        python_check("Android context retargeting", "dm/android/tests/test_apple_retarget.py")
+        python_check("CASC manifest recovery", "dm/android/tests/test_casc_recovery.py")
 
         compile_and_run("方向键/扳机映射（t_padmap）", [REPO / "dm/host/tests/t_padmap.c"], workspace / "t_padmap")
         # 启动设置：普通版与"环境写入失败"注入版都要跑（故障恢复那条只有注入版才覆盖）。
@@ -129,7 +132,8 @@ def main():
         for source, test, label in (("TouchPadState.java", "TouchPadStateTest", "Touch cancellation"),
                                     ("SaveArchive.java", "SaveArchiveTest", "存档包"),
                                     ("PackageArchive.java", "PackageArchiveTest", "数据包导入"),
-                                    ("ReleaseVersion.java", "ReleaseVersionTest", "GitHub release ordering")):
+                                    ("ReleaseVersion.java", "ReleaseVersionTest", "GitHub release ordering"),
+                                    ("GitHubData.java", "GitHubDataTest", "GitHub data download/resume/integrity")):
             if not (JAVAC.exists() and JAVA.exists()):
                 skipped.append("%s（%s）：没有项目 JDK（%s）" % (label, test, JAVAC))
                 continue
