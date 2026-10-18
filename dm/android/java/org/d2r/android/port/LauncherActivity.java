@@ -369,6 +369,11 @@ public final class LauncherActivity extends Activity {
             column.addView(driverItem);
         }
 
+        GitHubUpdates updates = new GitHubUpdates(this);
+        TextView updateItem = item(text("dmAndroidUpdateTitle"), 19, PARCHMENT, false, true);
+        updateItem.setOnClickListener(v -> updates.check());
+        column.addView(updateItem);
+
         TextView diagnostic = item(text("dmAndroidFoldDiagnostic"), 19, PARCHMENT, false, true);
         diagnostic.setOnClickListener(v -> startActivity(new Intent(this, FoldDiagnosticActivity.class)));
         column.addView(diagnostic);

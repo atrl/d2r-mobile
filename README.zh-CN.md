@@ -1,3 +1,5 @@
+> [整合安装与 GitHub 更新 / Install bundles and updates](docs/ANDROID_DISTRIBUTION.zh-CN.md)
+
 > **Android / vivo X Fold5 预览版**：[下载 APK](https://github.com/atrl/d2r-mobile/releases) · [安装、折叠适配与验收状态](docs/ANDROID_FOLD.md)。不含游戏数据，尚未完成 X Fold5 实玩验证。以下原版平台介绍不代表 Android 验收。
 
 # D2R Mobile

@@ -92,6 +92,9 @@ jobs:
           **首次安装必读：这个约 20 MB 的 APK 不是完整游戏。**
           没有游戏数据时不能开始游戏。需要自己的 Switch 版 D2R 本体、对应更新与 prod.keys，在电脑用本发布的打包套件生成 d2r-package.zip，再传到手机导入。PC 版目录不能直接导入。
           缺少数据时点击启动会显示准备说明。APK 可覆盖本 fork 的旧预览版安装。
+          启动器新增“检查 GitHub 更新”，支持本 fork 的预览版；浏览器下载后覆盖安装。
+          新增本地整合工具：签名 APK + 现成 Android 数据包 → 单个安装 ZIP。未包含或发布游戏数据。
+          整合与更新：https://github.com/atrl/d2r-mobile/blob/main/docs/ANDROID_DISTRIBUTION.zh-CN.md
           数据准备：https://github.com/atrl/d2r-mobile/blob/main/dm/android/kit/README.zh-CN.md
           尚未完成 X Fold5 实玩与温控验证。
           EOF
