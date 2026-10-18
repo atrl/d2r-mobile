@@ -38,7 +38,7 @@ final class TouchControls {
             if (!visible || destroyed) return;
             int next = D2RActivity.touchScene();
             if (next != scene) {
-                scene = next; expanded = false; releaseAll(); layout();
+                scene = next; releaseAll(); layout();
                 String key = scene == 1 ? "dmAndroidTouchWorldHint" : scene == 2 ? "dmAndroidTouchPanelHint" : "dmAndroidTouchMenuHint";
                 android.content.SharedPreferences prefs = activity.getSharedPreferences("touch-hints", 0);
                 if (!prefs.getBoolean(key, false)) {
@@ -55,6 +55,7 @@ final class TouchControls {
 
     TouchControls(Activity activity, Listener listener) {
         this.activity = activity;
+        expanded = activity.getSharedPreferences("touch-controls", 0).getBoolean("expanded", true);
         float aspect=16f/9f;
         String resolution=LaunchSettings.read(new java.io.File(activity.getFilesDir(),"temp/launch-settings.conf"),"resolution");
         if(resolution!=null)try {String[] parts=resolution.split("x");int w=Integer.parseInt(parts[0]),h=Integer.parseInt(parts[1]);if(w>0&&h>0)aspect=(float)w/h;}catch(RuntimeException ignored){}
@@ -92,7 +93,7 @@ final class TouchControls {
         handleWindow.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         handleWindow.setTouchModal(false); handleWindow.setSplitTouchEnabled(true);
         handleWindow.setInputMethodMode(PopupWindow.INPUT_METHOD_NOT_NEEDED);
-        handle.setOnClickListener(v -> { expanded = !expanded; releaseAll(); layout(); });
+        handle.setOnClickListener(v -> { expanded = !expanded; activity.getSharedPreferences("touch-controls", 0).edit().putBoolean("expanded", expanded).apply(); releaseAll(); layout(); });
         handle.setOnLongClickListener(v -> {
             Toast.makeText(activity, text(scene == 1 ? "dmAndroidTouchWorldHint" : scene == 2 ? "dmAndroidTouchPanelHint" : "dmAndroidTouchMenuHint"), Toast.LENGTH_LONG).show();
             return true;
@@ -119,6 +120,19 @@ final class TouchControls {
             for (ControlView group : groups) group.popup.dismiss();
             handleWindow.dismiss();
         }
+    }
+
+    void configureSize() {
+        int[] sizes = {75, 100, 125, 150};
+        String[] labels = {"75%", "100%", "125%", "150%"};
+        int value = activity.getSharedPreferences("touch-controls", 0).getInt("size", 100), selected = 1;
+        for (int i=0;i<sizes.length;i++) if (sizes[i]==value) selected=i;
+        releaseAll();
+        new android.app.AlertDialog.Builder(activity).setTitle(text("dmAndroidTouchSize"))
+            .setSingleChoiceItems(labels, selected, (dialog, which) -> {
+                activity.getSharedPreferences("touch-controls", 0).edit().putInt("size", sizes[which]).apply();
+                releaseAll(); layout(); dialog.dismiss();
+            }).setNegativeButton(android.R.string.cancel, null).show();
     }
 
     void destroy() {
@@ -201,14 +215,10 @@ final class TouchControls {
         if (gameHeight > height) { gameHeight = height; gameWidth = height * gameAspect; }
         float gameLeft = (width - gameWidth) / 2, gameTop = (height - gameHeight) / 2;
         float gameBottom = gameTop + gameHeight;
-        float scale = Math.min(1, Math.min((width - safeLeft - safeRight) / (640 * density),
+        float requested = activity.getSharedPreferences("touch-controls", 0).getInt("size", 100) / 100f;
+        float scale = Math.min(requested, Math.min((width - safeLeft - safeRight) / (640 * density),
             (height - safeTop - safeBottom) / (360 * density)));
-        // 高密度手机横屏较矮，限制最大按键组占高；平板原有尺寸保持可用。
-        // Cap control height on dense phones while retaining existing tablet sizing.
-        scale = Math.min(scale, (height - safeTop - safeBottom) * .36f / (184 * density));
-        float bottomSpace = height - safeBottom - gameBottom;
-        if (bottomSpace >= 96 * density)
-            scale = Math.min(scale, bottomSpace / (216 * density));
+        // Only screen bounds limit the selected size; letterboxing must not silently shrink buttons.
         for (ControlView group : groups) group.unit = density * scale;
         float margin = 16 * density * scale;
         ControlView stick = groups.get(0), face = groups.get(1);
