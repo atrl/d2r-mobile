@@ -460,4 +460,5 @@ static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {
     { "dmAndroidSaveImportConfirmGame", "导入会替换当前存档并退出游戏，重开后加载导入的存档。", "Importing replaces the current save and exits the game; the next launch loads the imported save." },
     { "dmAndroidSaveNone", "还没有存档可以导出", "There is no save to export yet" },
     { "dmAndroidSaveWorking", "正在处理存档…", "Working on the save…" },
+    { "dmAndroidFoldDiagnostic", "折叠屏与触控自检（无需游戏数据）", "Fold and touch check (no game data)" },
 };

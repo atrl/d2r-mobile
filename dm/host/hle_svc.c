@@ -20,6 +20,7 @@
 // The size starts at 5 GB and steps down on retry (on some devices reserving 5 GB returns ENOMEM(12)), floor 4864 MiB (the game needs 1 GB alias+stack + a 3728 MB heap; 4864 − 1024 = 3840 > 3728 + margin).
 // On iOS without the extended virtual addressing entitlement the limit depends on the device model (measured: 6 GB works on some, 5120 MiB fails on others and must drop to 4864 MiB) —
 // reserving up to 8 GB would make builds from developer accounts that cannot sign that entitlement (free accounts) exit at this step.
+#define RESERVE (5ull << 30)
 static size_t g_reserve;           // 实际预留大小（逐档降级后成功的值） | Actual reserved size (the value that succeeded after stepping down)
 static uint8_t *g_as;              // ASLR 区基址 = 整块 | ASLR region base = the whole block
 static uint8_t *g_heap; static size_t g_heap_cap; static int g_heap_rejects;

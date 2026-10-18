@@ -333,6 +333,11 @@ public final class LauncherActivity extends Activity {
         column.setOrientation(LinearLayout.VERTICAL);
         column.setGravity(Gravity.END);
         column.setPadding(margin, (int)(height * 0.075f), margin, (int)(height * 0.045f));
+        root.setFitsSystemWindows(true);
+        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            int edge = Math.round((r - l) * .045f);
+            column.setPadding(edge, Math.round((b - t) * .04f), edge, Math.round((b - t) * .04f));
+        });
 
         column.addView(item(text("dmAndroidLaunchTitle"), 42, GOLD, true, false));
         column.addView(item(text("dmAndroidLaunchSubtitle"), 15, MUTED, false, false));
@@ -363,6 +368,10 @@ public final class LauncherActivity extends Activity {
             driverItem.setOnClickListener(v -> { driverIndex = (driverIndex + 1) % DRIVER_STATES.length; applyLabels(); writeState(); });
             column.addView(driverItem);
         }
+
+        TextView diagnostic = item(text("dmAndroidFoldDiagnostic"), 19, PARCHMENT, false, true);
+        diagnostic.setOnClickListener(v -> startActivity(new Intent(this, FoldDiagnosticActivity.class)));
+        column.addView(diagnostic);
 
         importItem = item(importLabel(), 19, PARCHMENT, false, true);
         importItem.setOnClickListener(v -> pickPackage());

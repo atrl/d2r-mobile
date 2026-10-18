@@ -1,98 +1,89 @@
-# 构建可下载的制品：通用 APK（不含游戏代码，靠手机端导入的数据包运行）+ 给玩家电脑用的打包套件（源码 + 技能 + APK + 说明）。
-#
-# 为什么 CI 只能出"通用 APK"：游戏代码是从玩家自己的游戏文件改写出来的，不在仓库里、也不该进 CI。
-# 玩家拿到的流程是：下载 APK 与套件 → 把套件交给 AI 助手（技能在里面）→ 助手用玩家的游戏文件与 prod.keys
-# 在本机打出数据包 → 通过 adb 装 APK、推数据包 → 手机上点两下导入。
-#
-# Artifacts: a generic APK (no game code; the game data comes from the package imported on the phone) and the
-# pack kit for the player's PC (source + skill + APK + readme). The game code is derived from the player's own
-# files, so it is neither in this repository nor built here.
-name: build
-
+name: Android CI
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
-
-concurrency:
-  group: build-${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
-  contents: write          # 打 tag 时创建 Release | create a release on tags
-
+  contents: read
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      # 工具链放在工作区里，方便按 bootstrap.py 的内容做缓存 | keep the toolchain in the workspace so it can be cached
       DM_ANDROID_TOOLS: ${{ github.workspace }}/.tools/android
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-
-      # make_probe → patch_nso 要 lz4 与 capstone（本机构建时它们来自项目 venv）。
-      # make_probe -> patch_nso needs lz4 and capstone; locally those come from the project's venv.
-      - name: Python 依赖
-        run: python3 -m pip install --disable-pip-version-check lz4 capstone
-
-      - name: 计算工具链缓存键
-        id: tools
-        run: echo "key=${{ hashFiles('dm/android/tools/bootstrap.py') }}" >> "$GITHUB_OUTPUT"
-
+          python-version: '3.12'
+      - run: python3 -m pip install lz4==4.4.4 capstone==5.0.7
       - uses: actions/cache@v4
         with:
           path: ${{ env.DM_ANDROID_TOOLS }}
-          key: ${{ runner.os }}-android-tools-${{ steps.tools.outputs.key }}
-
-      - name: 安装 Android 构建工具（NDK / JDK / build-tools / platform，约 800 MB，首次之后走缓存）
-        run: python3 dm/android/tools/bootstrap.py
-
-      - name: 可移植检查（字面量、中英表、输入映射、启动设置、存档包、仓库卫生）
-        run: python3 dm/android/tools/ci_checks.py
-
-      # 版本要能区分构建：推 tag 时用 tag 名（发布），分支构建用 main-<短提交>。
-      # 写死的版本名会让系统把两个构建当成同一个版本，覆盖安装只会提示"重新安装"。
-      # The version must tell builds apart: the tag name for a release, main-<short commit> for a branch build.
-      # A hardcoded version name made the system treat two builds as one, so an overwrite install read as "reinstall".
-      - name: 计算版本
-        id: version
+          key: android-tools-${{ runner.os }}-${{ hashFiles('dm/android/tools/bootstrap.py', 'dm/android/tools/build_gpu_driver.py') }}
+      - run: python3 dm/android/tools/bootstrap.py
+      - run: python3 dm/android/tools/ci_checks.py
+      - name: Configure version
         run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=main-$(git rev-parse --short=8 HEAD)" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: 构建通用 APK
-        run: python3 dm/android/tools/build.py --game-run --version "${{ steps.version.outputs.value }}"
-
-      - name: 组装打包套件
-        run: python3 dm/android/tools/make_kit.py --version "${{ steps.version.outputs.value }}"
-
-      - name: 上传制品
-        uses: actions/upload-artifact@v4
+          echo "APK_VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          echo "APK_CODE=$((10000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+      - name: Build debug APK
+        if: github.ref_type != 'tag'
+        run: python3 dm/android/tools/build.py --game-run --version "ci-${GITHUB_SHA::8}" --version-code "$APK_CODE"
+      - name: Build signed release APK
+        if: github.ref_type == 'tag'
+        env:
+          D2R_KEYSTORE_BASE64: ${{ secrets.D2R_KEYSTORE_BASE64 }}
+          D2R_KEY_ALIAS: d2r-release
+          D2R_STORE_PASSWORD: ${{ secrets.D2R_STORE_PASSWORD }}
+          D2R_KEY_PASSWORD: ${{ secrets.D2R_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          export D2R_KEYSTORE="$RUNNER_TEMP/d2r-release.p12"
+          trap 'rm -f "$D2R_KEYSTORE"' EXIT
+          test -n "$D2R_KEYSTORE_BASE64"
+          printf '%s' "$D2R_KEYSTORE_BASE64" | base64 --decode > "$D2R_KEYSTORE"
+          chmod 600 "$D2R_KEYSTORE"
+          python3 dm/android/tools/build.py --game-run --release --version "$APK_VERSION" --version-code "$APK_CODE"
+      - name: Verify and package
+        run: |
+          export JAVA_HOME="$DM_ANDROID_TOOLS/jdk"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          "$DM_ANDROID_TOOLS/build-tools/apksigner" verify --verbose --print-certs dm/android/build/D2R-Android-port.apk > dm/android/build/signature.txt
+          python3 dm/android/tools/make_kit.py --version "${APK_VERSION//\//-}"
+          cp dm/android/build/D2R-Android-port.apk dist/
+          cp dm/android/build/signature.txt dist/
+          cd dist
+          sha256sum *.apk *.zip > SHA256SUMS
+      - uses: actions/upload-artifact@v4
         with:
           name: d2r-android-${{ github.run_number }}
-          path: |
-            dm/android/build/D2R-Android-port.apk
-            dist/d2r-package-kit-*.zip
+          path: dist/*
           if-no-files-found: error
-
-      # 玩家从这里下载：推 v* tag 就会建一个 Release，附件是 APK 与套件。
-      # This is where players download from: pushing a v* tag creates a release with the APK and the kit attached.
-      - name: 打 tag 时发布 Release
-        if: startsWith(github.ref, 'refs/tags/')
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: d2r-android-${{ github.run_number }}
+          path: dist
+      - name: Publish downloadable preview
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "D2R Android $GITHUB_REF_NAME" \
-            --generate-notes \
-            dm/android/build/D2R-Android-port.apk dist/d2r-package-kit-*.zip
+          cat > "$RUNNER_TEMP/notes.md" <<'EOF'
+          Android preview for vivo X Fold5. APK includes no game data; import your own prepared package.
+          Foldable window handling and a no-data touch/surface check are included.
+          No X Fold5 gameplay or thermal validation has been performed. See docs/ANDROID_FOLD.md for installation and acceptance status.
+          APK 为预览版，不含游戏数据。尚未完成 X Fold5 实玩与温控验证。
+          EOF
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --title "D2R Android $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" dist/*

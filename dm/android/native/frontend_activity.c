@@ -1,3 +1,4 @@
+#include "viewport.h"
 // 原游戏宿主的 NativeActivity 前端：真正运行 nnMain 并呈现游戏交换链。
 // NativeActivity frontend for the real guest host: execute nnMain and present its swapchain.
 #define _GNU_SOURCE
@@ -439,8 +440,8 @@ static int input_ready(int fd,int events,void *data) {
             pad_publish(s);handled=1;
         }else if(is_motion){int raw_action=AMotionEvent_getAction(event),action=raw_action&AMOTION_EVENT_ACTION_MASK;unsigned lifted=(raw_action&AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)>>AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;dm_touch touches[16];int count=0;
             pthread_mutex_lock(&s->lock);ANativeWindow *window=s->window;int w=window?ANativeWindow_getWidth(window):1,h=window?ANativeWindow_getHeight(window):1;pthread_mutex_unlock(&s->lock);
-            float gw=w,gh=w*9.f/16.f;if(gh>h){gh=h;gw=h*16.f/9.f;}float left=(w-gw)/2,top=(h-gh)/2;
-            if(action!=AMOTION_EVENT_ACTION_UP&&action!=AMOTION_EVENT_ACTION_CANCEL)for(unsigned i=0;i<AMotionEvent_getPointerCount(event)&&count<16;i++){if(action==AMOTION_EVENT_ACTION_POINTER_UP&&i==lifted)continue;float x=(AMotionEvent_getX(event,i)-left)/gw,y=(AMotionEvent_getY(event,i)-top)/gh;if(x>=0&&x<1&&y>=0&&y<1)touches[count++]=(dm_touch){AMotionEvent_getPointerId(event,i)&15,x,y};}
+            dm_viewport viewport=dm_viewport_fit(w,h,16,9);
+            if(action!=AMOTION_EVENT_ACTION_UP&&action!=AMOTION_EVENT_ACTION_CANCEL)for(unsigned i=0;i<AMotionEvent_getPointerCount(event)&&count<16;i++){if(action==AMOTION_EVENT_ACTION_POINTER_UP&&i==lifted)continue;float x,y;if(dm_viewport_touch(viewport,AMotionEvent_getX(event,i),AMotionEvent_getY(event,i),&x,&y))touches[count++]=(dm_touch){AMotionEvent_getPointerId(event,i)&15,x,y};}
             dm_touch_set(touches,count);
             // 首画面阶段：点击可确认标题/提示；按下沿由 HLE 锁存，不丢短按。
             // First-frame controls: taps confirm title/prompts; HLE latches press edges so short taps are retained.
@@ -522,6 +523,7 @@ static void window_created(ANativeActivity *a,ANativeWindow *w) {game_app *s=a->
 // rotation does not pass through onPause/onResume and is instantaneous, so the guest clock is **not** frozen (that
 // is for going to the background); the suspension is released per the current foreground state.
 static void window_resized(ANativeActivity *a,ANativeWindow *w) {game_app *s=a->instance;
+    dm_touch_set(NULL,0);pad_clear(s);
     pthread_mutex_lock(&s->lock);int same_window=s->window==w;pthread_mutex_unlock(&s->lock);
     // 同一个窗口才处理：新窗口有 onNativeWindowCreated 那条路；后端还没活时也没有交换链要重建，第一次出图会自己建。
     // 重建这一拍会慢（表面/交换链重建、缓存变冷），照回前台那次一样先告诉动态分辨率控制器别把它当成 GPU 吃紧。

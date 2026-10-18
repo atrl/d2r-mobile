@@ -487,6 +487,11 @@ public final class D2RActivity extends NativeActivity {
         updateTouchVisibility();
     }
 
+    @Override public void onConfigurationChanged(android.content.res.Configuration config) {
+        super.onConfigurationChanged(config);
+        if (touchControls != null) touchControls.configurationChanged();
+    }
+
     @Override protected void onResume() {
         super.onResume();
         activityResumed = true;

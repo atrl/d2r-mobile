@@ -1,3 +1,4 @@
+#include "viewport.h"
 // NVN 命令执行的 Vulkan 后端。沿用上游 C 接口名以复用记录层。
 // Vulkan NVN command executor. Retain upstream C interface names to reuse the recorder.
 #include "../../host/dm.h"
@@ -937,8 +938,8 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
         VkMemoryBarrier clear_order = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT};
         vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &clear_order, 0, NULL, 0, NULL);
         int sx = crop ? crop[0] : 0, sy = crop ? crop[1] : 0, sw = crop && crop[2] > 0 ? crop[2] : t->d.width, sh = crop && crop[3] > 0 ? crop[3] : t->d.height;
-        double scale = (double)screen_extent.width / sw; if (scale * sh > screen_extent.height) scale = (double)screen_extent.height / sh;
-        int dw = sw * scale, dh = sh * scale, x = (screen_extent.width - dw) / 2, y = (screen_extent.height - dh) / 2;
+        dm_viewport viewport = dm_viewport_fit(screen_extent.width, screen_extent.height, sw, sh);
+        int dw=viewport.width, dh=viewport.height, x=viewport.x, y=viewport.y;
         VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}, .srcOffsets = {{sx,sy,0},{sx+sw,sy+sh,1}}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}, .dstOffsets = {{x,y,0},{x+dw,y+dh,1}}};
         vkCmdBlitImage(command, e->image, VK_IMAGE_LAYOUT_GENERAL, screen_images[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; barrier.dstAccessMask = 0; barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
@@ -1084,3 +1085,7 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long mb, int ok, unsig
 void mtl_ui_ghost(int on, float px, float py, const float grid[4], float cx, float cy) { (void)on; (void)px; (void)py; (void)grid; (void)cx; (void)cy; }
 int mtl_ui_ghost_rect(float r[4]) { (void)r; return 0; }
 void dm_gfx_shot_at(long frame, const char *path) { (void)frame; dm_shot_written(path, 0); }
+
+// Metal host drawing overrides have no Vulkan equivalent yet.
+uint64_t mtl_host_latch(void) { return 0; }
+void mtl_host_apply(uint64_t value) { (void)value; }

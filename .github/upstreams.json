@@ -1,0 +1,7 @@
+{
+  "upstream": "https://github.com/jhaizhou-ops/d2r-mobile.git",
+  "android": "https://github.com/sydeEvans/d2r-android.git",
+  "initial_upstream": "9393b00ea9aca52d9254214da93738f26582562f",
+  "android_base": "2eb5758771f110cd53082b999d88d242766610da",
+  "android_reviewed": "5d8e32210b6d54bc0f8140865332a8616766779f"
+}

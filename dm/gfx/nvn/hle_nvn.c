@@ -891,7 +891,9 @@ static void x_submit(const uint64_t *h, int n, uint64_t sub, uint64_t host) {
     for (int i = 0; i < n; i++) { mtl_exec_rest(h + i + 1, n - i - 1); mtl_exec((const uint8_t *)h[i]); }
     mtl_exec_rest(NULL, 0);
     uint64_t f = mtl_sub_commit();
+#ifndef __ANDROID__
     if (f != sub) { static int red; if (!red++) LOG("【红】翻译队列：第 %llu 次提交的 Metal 栅栏是 %llu，栅栏与提交数对不上，游戏等同步会提前 / 推迟放行", (unsigned long long)sub, (unsigned long long)f); }
+#endif
     snap_tick(sub);
     uint64_t dw = now_ns() - t0;
     atomic_fetch_add(&g_nvn_ns, dw); atomic_fetch_add(&g_sub_wall_ns, dw);
@@ -933,7 +935,13 @@ static void *x_thread(void *a) {
     return NULL;
 }
 static void x_start(void) {
+#ifdef __ANDROID__
+    // Vulkan already owns an asynchronous submission queue. Its lifecycle gate
+    // requires translation to finish before gfx_leave; do not add a second queue.
+    g_x_sync = 1;
+#else
     const char *e = getenv("DM_NVN_SYNC"); g_x_sync = e && atoi(e);
+#endif
     if (g_x_sync) { LOG("[nvn] DM_NVN_SYNC=1：翻译在提交线程上同步做（对照档）"); return; }
     pthread_attr_t at; pthread_attr_init(&at); pthread_attr_set_qos_class_np(&at, QOS_CLASS_USER_INTERACTIVE, 0); pthread_attr_setstacksize(&at, 8 << 20);
     pthread_t t; if (pthread_create(&g_x_thr, &at, x_thread, NULL)) { LOG("【红】翻译线程起不来，改为同步翻译"); g_x_sync = 1; } else LOG("[nvn] 翻译线程已起：提交 / 出图在翻译线程上按序执行（队列 %d 项）", XQ);
@@ -954,7 +962,13 @@ static uint64_t x_push(xjob *j) {   // 返回任务号 | Returns the job number
 }
 static void x_wait(uint64_t job) { pthread_mutex_lock(&g_xmu); while (g_xq_done < job) pthread_cond_wait(&g_xcv, &g_xmu); pthread_mutex_unlock(&g_xmu); }
 static void x_drain(void) { pthread_mutex_lock(&g_xmu); uint64_t job = g_xq_in; pthread_mutex_unlock(&g_xmu); x_wait(job); }
-static uint64_t x_fence(void) { return atomic_load(&g_x_subs); }
+static uint64_t x_fence(void) {
+#ifdef __ANDROID__
+    return mtl_last_fence(); // Vulkan may split one guest submit into multiple GPU submissions.
+#else
+    return atomic_load(&g_x_subs);
+#endif
+}
 static uint64_t x_present_ticket(uint64_t job) {   // 出图任务执行完后换来的出图线程票号（0 = 那次出图被丢弃，不用等） | Present thread ticket obtained after the present job runs (0 = that present was dropped, nothing to wait for)
     x_wait(job);
     pthread_mutex_lock(&g_xmu); uint64_t tk = g_xtk[job % XTK].job == job ? g_xtk[job % XTK].tk : 0; int lost = g_xtk[job % XTK].job != job; pthread_mutex_unlock(&g_xmu);

@@ -1,3 +1,5 @@
+> **Android / vivo X Fold5 预览版**：[下载 APK](https://github.com/atrl/d2r-mobile/releases) · [安装、折叠适配与验收状态](docs/ANDROID_FOLD.md)。不含游戏数据，尚未完成 X Fold5 实玩验证。以下原版平台介绍不代表 Android 验收。
+
 # D2R Mobile
 
 **An open-source iOS / macOS compatibility layer for Diablo II: Resurrected with the Reign of the Warlock expansion.** It brings the Nintendo Switch release you bought, expansion included, to iPhone, iPad and Mac in full: the original game code runs natively, every control is rebuilt for touch, the frame rate holds at 60 fps, and you are in a game one second after the main menu. There is now a native macOS version as well (first version): on an Apple silicon Mac it starts on double-click and works with keyboard, mouse and gamepad. Apple TV 4K (3rd generation, A15) has a community port (developer preview) that has reached the character-selection screen only on its author's device; see the device table below.

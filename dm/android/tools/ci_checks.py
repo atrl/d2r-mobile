@@ -141,6 +141,9 @@ def main():
             report("%s（%s）" % (label, test), result.returncode == 0,
                    (result.stdout or "").strip().splitlines()[-1] if result.stdout else "")
 
+        compile_and_run("Fold viewport and touch mapping", [ROOT / "tests/viewport_test.c"], workspace / "viewport",
+                        ("-std=c11", "-Wall", "-Wextra", "-Werror", "-I", ROOT / "native"))
+        python_check("Release signing contract", "dm/android/tests/test_release.py")
         hygiene()
         table_stubs()
 

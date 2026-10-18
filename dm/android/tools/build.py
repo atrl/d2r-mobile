@@ -32,7 +32,7 @@ LAUNCHER_NAME = "org.d2r.android.port.LauncherActivity"
 # orientation|screenSize, so a rotation does not recreate the activity and the game process and the run both survive.
 LAUNCHER_ACTIVITY_BLOCK = (
     '<activity android:name="' + LAUNCHER_NAME + '" android:exported="true"'
-    ' android:screenOrientation="sensorLandscape" android:configChanges="orientation|screenSize|keyboardHidden"'
+    ' android:resizeableActivity="true" android:screenOrientation="sensorLandscape" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboardHidden"'
     ' android:theme="@android:style/Theme.Material.NoActionBar">\n'
     '            <intent-filter>\n'
     '                <action android:name="android.intent.action.MAIN" />\n'
@@ -42,7 +42,7 @@ LAUNCHER_ACTIVITY_BLOCK = (
     '        ')
 GAME_ACTIVITY_BLOCK = (
     '<activity android:name="' + GAME_ACTIVITY + '" android:exported="false"'
-    ' android:screenOrientation="sensorLandscape" android:configChanges="orientation|screenSize|keyboardHidden"'
+    ' android:resizeableActivity="true" android:screenOrientation="sensorLandscape" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboardHidden"'
     ' android:theme="@android:style/Theme.Material.NoActionBar">\n'
     '            <meta-data android:name="android.app.lib_name" android:value="dmandroid" />\n'
     '        </activity>')
@@ -108,7 +108,21 @@ def main():
                         help="随 APK 分发的 Turnip 驱动；默认用仓库里的 dm/android/prebuilt/turnip/")
     parser.add_argument("--no-turnip", action="store_true",
                         help="不出内置驱动（只出通用包，启动界面里那一项会自己隐藏）")
+    parser.add_argument("--release", action="store_true", help="Require persistent signing credentials; disable debugging")
+    parser.add_argument("--version-code", type=int, help="Explicit monotonically increasing Android version code")
     args = parser.parse_args()
+    if args.version_code is not None and not 1 <= args.version_code <= 2100000000:
+        parser.error("version-code must be between 1 and 2100000000")
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", args.version):
+        parser.error("Invalid version name")
+    if args.release:
+        if not args.game_run or args.version_code is None:
+            parser.error("release requires --game-run and --version-code")
+        required = ("D2R_KEYSTORE", "D2R_KEY_ALIAS", "D2R_STORE_PASSWORD", "D2R_KEY_PASSWORD")
+        if any(not os.environ.get(key) for key in required):
+            parser.error("release signing credentials are required")
+        if not Path(os.environ["D2R_KEYSTORE"]).is_file():
+            parser.error("release keystore does not exist")
     if args.game_source and not args.game_run: parser.error("--game-source only makes sense with --game-run")
     if args.game_run and not args.game_source:
         # 没有游戏源码也照样出 APK：宿主与前端完整，**游戏模块由手机端导入的数据包提供**（启动界面本来就要
@@ -223,6 +237,7 @@ def main():
         # 正式游戏声明游戏类别；探针应用仍保持原类别。
         # Declare the game category only for the playable application, not the probe.
         source = (ROOT / "AndroidManifest.xml").read_text()
+        source = source.replace('android:debuggable="true"', 'android:debuggable="false"') if args.release else source
         source = source.replace('android:hasCode="false"', 'android:hasCode="true" android:appCategory="game"')
         # 版本写进清单：名字给人看，号码给系统判断升级。两处都要求恰好替换一次，清单改了会立刻报错。
         # The version goes into the manifest: the name is for people, the code is what the system compares for an
@@ -230,11 +245,12 @@ def main():
         source, named = re.subn(r'android:versionName="[^"]*"',
                                 'android:versionName="%s"' % version_name(args.version), source, count=1)
         source, coded = re.subn(r'android:versionCode="[^"]*"',
-                                'android:versionCode="%d"' % version_code(args.version), source, count=1)
+                                'android:versionCode="%d"' % (args.version_code or version_code(args.version)), source, count=1)
         if (named, coded) != (1, 1):
             sys.exit("game manifest: expected exactly one versionName and one versionCode")
         source, replaced = re.subn(r'<activity android:name="android\.app\.NativeActivity".*?</activity>',
-                                   LAUNCHER_ACTIVITY_BLOCK + GAME_ACTIVITY_BLOCK, source, count=1, flags=re.S)
+                                   LAUNCHER_ACTIVITY_BLOCK + GAME_ACTIVITY_BLOCK +
+                                   '<activity android:name="org.d2r.android.port.FoldDiagnosticActivity" android:exported="false" android:resizeableActivity="true" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboardHidden" android:theme="@android:style/Theme.Material.NoActionBar" />', source, count=1, flags=re.S)
         if replaced != 1: sys.exit("game manifest: expected exactly one NativeActivity activity block")
         manifest.write_text(source)
     run([TOOLS / "build-tools/aapt2", "compile", "--dir", build / "res", "-o", build / "resources.zip"])
@@ -253,14 +269,18 @@ def main():
                 z.write(args.game_source / ("libdmguest_" + name + ".so"), "lib/arm64-v8a/libdmguest_" + name + ".so")
     aligned = build / "aligned.apk"
     run([TOOLS / "build-tools/zipalign", "-f", "-P", "16", "4", unsigned, aligned])
-    keystore = TOOLS / "debug.keystore"
-    if not keystore.exists():
-        run([TOOLS / "jdk/bin/keytool", "-genkeypair", "-keystore", keystore, "-storepass", "android", "-keypass", "android",
-             "-alias", "androiddebugkey", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
-             "-dname", "CN=Android Debug,O=Android,C=US"], env=env)
     apk = build / "D2R-Android-port.apk"
-    run([TOOLS / "build-tools/apksigner", "sign", "--ks", keystore, "--ks-pass", "pass:android", "--key-pass", "pass:android",
-         "--out", apk, aligned], env=env)
+    if args.release:
+        sign = ["--ks", os.environ["D2R_KEYSTORE"], "--ks-key-alias", os.environ["D2R_KEY_ALIAS"],
+                "--ks-pass", "env:D2R_STORE_PASSWORD", "--key-pass", "env:D2R_KEY_PASSWORD"]
+    else:
+        keystore = TOOLS / "debug.keystore"
+        if not keystore.exists():
+            run([TOOLS / "jdk/bin/keytool", "-genkeypair", "-keystore", keystore, "-storepass", "android", "-keypass", "android",
+                 "-alias", "androiddebugkey", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
+                 "-dname", "CN=Android Debug,O=Android,C=US"], env=env)
+        sign = ["--ks", keystore, "--ks-pass", "pass:android", "--key-pass", "pass:android"]
+    run([TOOLS / "build-tools/apksigner", "sign", *sign, "--out", apk, aligned], env=env)
     run([TOOLS / "build-tools/apksigner", "verify", apk], env=env)
     print("APK:", apk)
     if args.install:

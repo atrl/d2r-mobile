@@ -24,7 +24,7 @@ final class TouchControls {
     private final Listener listener;
     private final TouchPadState state = new TouchPadState();
     private final ArrayList<ControlView> groups = new ArrayList<>();
-    private final float density;
+    private float density;
     private final View.OnLayoutChangeListener layoutListener;
     private boolean visible, destroyed;
     private int previousWidth, previousHeight;
@@ -85,6 +85,12 @@ final class TouchControls {
         setVisible(false);
         destroyed = true;
         decor.removeOnLayoutChangeListener(layoutListener);
+    }
+
+    void configurationChanged() {
+        releaseAll();
+        density = activity.getResources().getDisplayMetrics().density;
+        decor.post(this::layout);
     }
 
     private void releaseAll() {
