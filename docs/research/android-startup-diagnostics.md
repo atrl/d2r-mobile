@@ -6,4 +6,4 @@ The launcher now offers a selectable local diagnostic report and a Storage Acces
 
 Export immediately after the failed start, before another attempt overwrites game.log. Android exit records can include older deliberate stops: timestamps and descriptions must be correlated with the failed attempt, not treated as proof by themselves.
 
-Validation: Linux CI checks (20) pass; release APK builds with Android API 35 and Java 8. Real vivo failure diagnosis remains pending the report.
+Validation: Linux CI checks (20) pass; release APK builds with Android API 35 and Java 8. Android 15 emulator: signed APK cover-install succeeded; report dialog rendered, then the system document picker exported a 67,054-byte UTF-8 file containing device details, process exit history and game.log. Initial pull before the asynchronous write completed found no file; the completed export was pulled and verified. Real vivo failure diagnosis remains pending the report.
