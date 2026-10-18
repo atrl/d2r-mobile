@@ -57,6 +57,7 @@ public final class LauncherActivity extends Activity {
     private static final int PICK_PACKAGE = 1;
     private static final int EXPORT_SAVE = 2;
     private static final int IMPORT_SAVE = 3;
+    private static final int EXPORT_DIAGNOSTICS = 4;
 
     private static final int GOLD = 0xffe8c078;
     private static final int PARCHMENT = 0xffe8e0d0;
@@ -377,6 +378,9 @@ public final class LauncherActivity extends Activity {
         TextView diagnostic = item(text("dmAndroidFoldDiagnostic"), 19, PARCHMENT, false, true);
         diagnostic.setOnClickListener(v -> startActivity(new Intent(this, FoldDiagnosticActivity.class)));
         column.addView(diagnostic);
+        TextView crashReport = item(text("dmAndroidCrashReport"), 19, PARCHMENT, false, true);
+        crashReport.setOnClickListener(v -> showDiagnostics());
+        column.addView(crashReport);
 
         TextView downloadItem = item(text("dmAndroidDataDownload"), 19, PARCHMENT, false, true);
         downloadItem.setOnClickListener(v -> downloadData());
@@ -515,6 +519,19 @@ public final class LauncherActivity extends Activity {
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (result != RESULT_OK || data == null || data.getData() == null) return;
+        if (request == EXPORT_DIAGNOSTICS) {
+            Uri target = data.getData();
+            new Thread(() -> {
+                try (OutputStream out = getContentResolver().openOutputStream(target)) {
+                    if (out == null) throw new IOException("Cannot open destination");
+                    out.write(StartupDiagnostics.collect(this).getBytes(StandardCharsets.UTF_8));
+                    runOnUiThread(() -> setStatus(text("dmAndroidCrashExported"), PARCHMENT));
+                } catch (Exception error) {
+                    runOnUiThread(() -> setStatus(String.valueOf(error), WARNING));
+                }
+            }, "d2r-diagnostics").start();
+            return;
+        }
         if (request == EXPORT_SAVE) { writeSaveArchive(data.getData()); return; }
         if (request == IMPORT_SAVE) { readSaveArchive(data.getData()); return; }
         if (request == PICK_PACKAGE) beginImport(data.getData());
@@ -668,6 +685,29 @@ public final class LauncherActivity extends Activity {
         return format.equals(failure.key)
             ? String.valueOf(error.getMessage())
             : String.format(format, failure.arguments);
+    }
+
+    private void showDiagnostics() {
+        new Thread(() -> {
+            String report = StartupDiagnostics.collect(this);
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                TextView body = item(report, 12, PARCHMENT, false, false);
+                body.setTextIsSelectable(true);
+                ScrollView scroll = new ScrollView(this);
+                scroll.addView(body);
+                new AlertDialog.Builder(this).setTitle(text("dmAndroidCrashReport"))
+                    .setView(scroll)
+                    .setPositiveButton(text("dmAndroidCrashExport"), (dialog, which) -> {
+                        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                        intent.addCategory(Intent.CATEGORY_OPENABLE);
+                        intent.setType("text/plain");
+                        intent.putExtra(Intent.EXTRA_TITLE, "d2r-startup-report.txt");
+                        try { startActivityForResult(intent, EXPORT_DIAGNOSTICS); }
+                        catch (RuntimeException error) { setStatus(String.valueOf(error), WARNING); }
+                    }).setNegativeButton(android.R.string.cancel, null).show();
+            });
+        }, "d2r-diagnostics-preview").start();
     }
 
     private void startGame() {
