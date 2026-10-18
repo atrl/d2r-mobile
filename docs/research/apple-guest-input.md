@@ -98,3 +98,9 @@ python3 dm/android/tools/audit_guest_imports.py /path/to/apple-images dm/android
 
 The three synthetic conversion suites are included in Android CI. CI installs Unicorn 2.1.4 and never downloads community game inputs; those remain local conversion inputs.
 转换的三组合成测试已接入 Android CI，固定使用 Unicorn 2.1.4；CI 不下载游戏输入。
+
+## Touch overlay packaging / 触控覆盖层打包
+
+The community runtime overlay includes root-level `ctrl_touch` and `touch_strings.tsv`. Previously the Android packer only collected `data/` and flattened resource paths, while the launcher did not set `DM_ROMFS_OVERLAY`; that would omit the sidecars and leave host touch-layout switching disabled. The packer now preserves relative resource paths and includes a complete marker/wording pair (plus the optional textbox table). The imported-package launcher enables the merged overlay when the marker exists and requires its wording table. Synthetic packaging regression, all 19 local CI checks, APK compilation and static import coverage pass. Actual on-device touch behavior remains unverified.
+
+已补齐覆盖层根目录的触控标记及文字表，保留打包相对路径，并在导入包启动时启用该覆盖层。触控标记存在但文字表缺失时明确报错。真机触控交互尚未验证。

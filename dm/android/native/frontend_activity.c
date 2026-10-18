@@ -234,6 +234,14 @@ static void *boot(void *argument) {
         // /storage/emulated) and dlopen from there fails. The bulk assets stay external, where the gigabytes fit.
         snprintf(metadata,sizeof metadata,"%s/d2r-package/game",s->activity->internalDataPath);mkdir(metadata,0700);
         snprintf(path,sizeof path,"%s/d2r-package/romfs",s->activity->externalDataPath);setenv("DM_ROMFS",path,1);
+        // A merged touch overlay is also the source for host-side markers/tables.
+        // 合并后的触控覆盖层同时提供宿主读取的标记与旁路表。
+        char touch_marker[1400];snprintf(touch_marker,sizeof touch_marker,"%s/ctrl_touch",path);
+        if(access(touch_marker,R_OK)==0){
+            char touch_strings[1400];snprintf(touch_strings,sizeof touch_strings,"%s/touch_strings.tsv",path);
+            if(access(touch_strings,R_OK)!=0)die("Touch overlay is missing touch_strings.tsv");
+            setenv("DM_ROMFS_OVERLAY",path,1);
+        }else unsetenv("DM_ROMFS_OVERLAY");
         snprintf(path,sizeof path,"%s/d2r-package/shaders",s->activity->externalDataPath);setenv("DM_VK_SHADERS",path,1);
         // 模块目录单独一个变量：DM_ANDROID_LIBDIR 归图形驱动找 hook 库用，见 loader.c 的说明。
         // A separate variable for the module directory: DM_ANDROID_LIBDIR belongs to the graphics driver's hook

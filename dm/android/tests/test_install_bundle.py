@@ -66,6 +66,19 @@ class BundleTest(unittest.TestCase):
         assemble(two, self.root / 'game', self.root / 'romfs', self.root / 'shaders', self.root / 'derived.tsv', quiet=True)
         validate_package(two)
 
+    def test_touch_overlay_sidecars_are_packaged(self):
+        from build_package import collect_romfs, PackageError
+        romfs = self.root / 'romfs'
+        (romfs / 'ctrl_touch').write_text('synthetic marker')
+        with self.assertRaises(PackageError): collect_romfs(romfs)
+        (romfs / 'touch_strings.tsv').write_text('synthetic strings')
+        output = self.root / 'touch.zip'
+        assemble(output, self.root / 'game', romfs, self.root / 'shaders', self.root / 'derived.tsv', quiet=True)
+        with zipfile.ZipFile(output) as archive:
+            self.assertEqual(archive.read('romfs/ctrl_touch'), b'synthetic marker')
+            self.assertEqual(archive.read('romfs/touch_strings.tsv'), b'synthetic strings')
+        validate_package(output)
+
     def test_apple_input_rejected(self):
         apple = self.root / 'apple.zip'
         with zipfile.ZipFile(apple, 'w') as archive:

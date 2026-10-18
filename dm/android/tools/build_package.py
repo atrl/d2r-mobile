@@ -77,7 +77,16 @@ def collect_romfs(directory):
     entries = sorted(p for p in data.rglob("*") if p.is_file())
     if not entries:
         raise PackageError(f"romfs data/ is empty: {data}")
-    return entries
+    # The community overlay needs both its marker and touch wording sidecar.
+    # 社区覆盖层需要同时保留触控标记与文字旁路表。
+    touch = [directory / name for name in ("ctrl_touch", "touch_strings.tsv")]
+    if any(path.exists() for path in touch):
+        if not all(path.is_file() and path.stat().st_size for path in touch):
+            raise PackageError("touch overlay requires ctrl_touch and touch_strings.tsv")
+        entries.extend(touch)
+    textbox = directory / "dm_textbox_plain.tsv"
+    if textbox.is_file(): entries.append(textbox)
+    return sorted(entries)
 
 
 def collect_shaders(directory):
@@ -185,7 +194,7 @@ def assemble(output, game, romfs, shaders, derived=None, note=None, quiet=False)
         for name in game_files:
             write_entry(archive, game / name, f"game/{name}", progress)
         for path in romfs_files:
-            write_entry(archive, path, f"romfs/data/{path.name}", progress)
+            write_entry(archive, path, f"romfs/{path.relative_to(romfs).as_posix()}", progress)
         for path in shader_files:
             write_entry(archive, path, f"shaders/{path.name}", progress)
         if derived is not None:
