@@ -31,3 +31,14 @@ Local evidence: /tmp/d2r-menu-touch-game.log, /tmp/d2r-menu-touch-result.png,
 Still unverified: repeated save/exit/reload, combat, multitouch cancellation on a
 real foldable, vivo installation and sustained performance. This is not evidence
 of complete playability, and the candidate is not yet published.
+
+## Download progress follow-up
+
+The 6,147,543,691-byte download used integer percentages, so its first 61 MB
+were displayed as 0%. The candidate now refreshes byte progress at most twice
+per second and reports connection, retry and part verification separately.
+A real GitHub transfer in the emulator displayed 0.40%, 23.7 / 5862.8 MiB;
+the partial file measured 25,291,096 bytes shortly after the screenshot.
+Evidence: /tmp/d2r-download-status.png. Cancellation retained partial data.
+A 16-byte range probe against the production first part returned HTTP 206.
+These observations establish this test network worked, not the user's network.
