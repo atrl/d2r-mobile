@@ -14,7 +14,7 @@ final class GitHubData {
         "45b8e7c84c4c28341e4bd5d16f0ca0a9c03652101824170be43050e7805d22a5",
         "840592731609d9e47abd61f7d9bfb94c8e848613cfb342a2afe29953df96dece",
         "e6d5b6241ae8da95e886c46ecc816fb9cd210868c39ad0e88e5da7184f0db544"};
-    interface Sink { boolean cancelled(); void progress(long bytes); }
+    interface Sink { boolean cancelled(); void progress(long bytes); default void phase(String phase, int attempt) {} }
     static void check(Sink sink) throws IOException {
         if (sink.cancelled()) throw new IOException("Download cancelled; tap Download game data to resume.");
     }
@@ -23,6 +23,8 @@ final class GitHubData {
         if (offset > size) { if (!file.delete()) throw new IOException("Cannot reset download"); offset = 0; }
         if (offset < size) {
             check(sink);
+            sink.progress(offset);
+            sink.phase("connecting", 0);
             HttpURLConnection c = (HttpURLConnection)url.openConnection();
             c.setConnectTimeout(15000); c.setReadTimeout(30000);
             c.setRequestProperty("Accept-Encoding", "identity");
@@ -43,6 +45,8 @@ final class GitHubData {
             } finally { c.disconnect(); }
         }
         if (file.length() != size) throw new IOException("Incomplete download; retry to resume");
+        sink.progress(size);
+        sink.phase("verifying", 0);
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         try (InputStream in = new FileInputStream(file)) {
             byte[] buffer = new byte[256 * 1024]; int n;
@@ -61,6 +65,7 @@ final class GitHubData {
             catch (IOException error) {
                 check(sink);
                 if (attempt == 2) throw error;
+                sink.phase("retrying", attempt + 2);
                 Thread.sleep(1000L * (attempt + 1));
             }
         }
@@ -75,6 +80,7 @@ final class GitHubData {
             fetchWithRetry(new URL(BASE + suffix), parts[i], i == 3 ? 447543691L : 1900000000L, HASHES[i], new Sink() {
                 public boolean cancelled() { return sink.cancelled(); }
                 public void progress(long bytes) { sink.progress(base + bytes); }
+                public void phase(String phase, int attempt) { sink.phase(phase, attempt); }
             });
         }
         return parts;

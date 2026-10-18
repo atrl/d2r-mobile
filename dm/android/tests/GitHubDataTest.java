@@ -28,7 +28,13 @@ public class GitHubDataTest {
         server.start();
         File dir = Files.createTempDirectory("data-download-test").toFile();
         File file = new File(dir, "part");
-        GitHubData.Sink sink = new GitHubData.Sink() { public boolean cancelled() { return false; } public void progress(long n) {} };
+        java.util.List<String> phases = new java.util.ArrayList<>();
+        java.util.List<Long> progress = new java.util.ArrayList<>();
+        GitHubData.Sink sink = new GitHubData.Sink() {
+            public boolean cancelled() { return false; }
+            public void progress(long n) { progress.add(n); }
+            public void phase(String phase, int attempt) { phases.add(phase + ":" + attempt); }
+        };
         String base = "http://127.0.0.1:" + server.getAddress().getPort();
         try {
             for (String path : new String[]{"/part", "/ignore"}) {
@@ -36,8 +42,13 @@ public class GitHubDataTest {
                 GitHubData.fetch(new URL(base+path),file,data.length,hash.toString(),sink);
                 if (!java.util.Arrays.equals(data, Files.readAllBytes(file.toPath()))) throw new AssertionError("resume/replace");
             }
+            if (!progress.contains(7L) || !progress.contains((long)data.length)
+                    || !phases.contains("connecting:0") || !phases.contains("verifying:0"))
+                throw new AssertionError("missing resume progress or phase status");
+            phases.clear();
             // Completed cache is reused without opening any network connection.
             GitHubData.fetch(new URL("http://127.0.0.1:1"),file,data.length,hash.toString(),sink);
+            if (!phases.equals(java.util.Arrays.asList("verifying:0"))) throw new AssertionError("cached part status");
             Files.write(file.toPath(), new byte[data.length]);
             try { GitHubData.fetch(new URL(base+"/part"),file,data.length,hash.toString(),sink); throw new AssertionError("accepted corruption"); }
             catch (IOException expected) { if (file.exists()) throw new AssertionError("kept corrupt cache"); }
@@ -50,6 +61,7 @@ public class GitHubDataTest {
             try(InputStream in = GitHubData.open(new File[]{file,second})) { for(int n=1;n<=3;n++) if(in.read()!=n) throw new AssertionError("part order"); if(in.read()!=-1)throw new AssertionError(); }
             second.delete(); file.delete();
             GitHubData.fetchWithRetry(new URL(base+"/flaky"),file,data.length,hash.toString(),sink);
+            if (!phases.contains("retrying:2")) throw new AssertionError("retry status missing");
             if (attempts.get()!=2) throw new AssertionError("transient failure not retried");
             System.out.println("Resume, ignored range, corrupt cache, invalid range, cancel, concatenation passed");
         } finally { server.stop(0); file.delete(); dir.delete(); }

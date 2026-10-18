@@ -6,6 +6,7 @@
 #include "../../host/hle.h"
 #include "../../host/front.h"
 #include "../../host/dm_input.h"
+#include "../../host/dm_cursor.h"
 #include "../../host/dm_i18n.h"
 #include "../../host/dm_hud.h"
 #include "debug_stats.h"
@@ -33,6 +34,7 @@ typedef struct {
     int stop; _Atomic int started; _Atomic int activity_resumed;
     uint64_t pad_buttons,hat_buttons,trigger_buttons,move_keys;int tap_a;int32_t lx,ly,rx,ry;
     int touch_needs_down;
+    int ui_finger_active,ui_finger_id;
     uint64_t touch_buttons;int32_t touch_lx,touch_ly,touch_rx,touch_ry;
     pthread_t debug_thread;int debug_started;_Atomic int debug_stop;
     float requested_frame_rate;int frame_rate_attempted;
@@ -460,6 +462,29 @@ static int input_ready(int fd,int events,void *data) {
         }else if(is_motion){int raw_action=AMotionEvent_getAction(event),action=raw_action&AMOTION_EVENT_ACTION_MASK;unsigned lifted=(raw_action&AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)>>AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;dm_touch touches[16];int count=0;
             pthread_mutex_lock(&s->lock);ANativeWindow *window=s->window;int w=window?ANativeWindow_getWidth(window):1,h=window?ANativeWindow_getHeight(window):1;pthread_mutex_unlock(&s->lock);
             dm_viewport viewport=dm_viewport_fit(w,h,16,9);
+            // Menu clicks use the same host UI path as iOS; raw HID touch alone does not activate these buttons.
+            if(action==AMOTION_EVENT_ACTION_DOWN && !dm_ingame_now()) {
+                float x,y;
+                if(dm_viewport_touch(viewport,AMotionEvent_getX(event,0),AMotionEvent_getY(event,0),&x,&y)) {
+                    s->ui_finger_active=1;s->ui_finger_id=AMotionEvent_getPointerId(event,0);
+                    dm_ui_touch(0,x,y);
+                }
+            }
+            if(s->ui_finger_active) {
+                if(action==AMOTION_EVENT_ACTION_CANCEL) {dm_ui_touch(3,0,0);s->ui_finger_active=0;}
+                else for(unsigned i=0;i<AMotionEvent_getPointerCount(event);i++) {
+                    if(AMotionEvent_getPointerId(event,i)!=s->ui_finger_id)continue;
+                    float x,y;
+                    int up=action==AMOTION_EVENT_ACTION_UP || (action==AMOTION_EVENT_ACTION_POINTER_UP && i==lifted);
+                    if(dm_viewport_touch(viewport,AMotionEvent_getX(event,i),AMotionEvent_getY(event,i),&x,&y)) {
+                        if(up)dm_ui_touch(2,x,y);
+                        else if(action==AMOTION_EVENT_ACTION_MOVE)dm_ui_touch(1,x,y);
+                    } else {dm_ui_touch(3,0,0);s->ui_finger_active=0;}
+                    if(up)s->ui_finger_active=0;
+                    break;
+                }
+                AInputQueue_finishEvent(s->input,event,1);continue;
+            }
             if(action==AMOTION_EVENT_ACTION_DOWN)s->touch_needs_down=0;
             if(!s->touch_needs_down&&action!=AMOTION_EVENT_ACTION_UP&&action!=AMOTION_EVENT_ACTION_CANCEL)for(unsigned i=0;i<AMotionEvent_getPointerCount(event)&&count<16;i++){if(action==AMOTION_EVENT_ACTION_POINTER_UP&&i==lifted)continue;float x,y;if(dm_viewport_touch(viewport,AMotionEvent_getX(event,i),AMotionEvent_getY(event,i),&x,&y))touches[count++]=(dm_touch){AMotionEvent_getPointerId(event,i)&15,x,y};}
             dm_touch_set(touches,count);
@@ -532,7 +557,7 @@ static void window_created(ANativeActivity *a,ANativeWindow *w) {game_app *s=a->
 // rotation does not pass through onPause/onResume and is instantaneous, so the guest clock is **not** frozen (that
 // is for going to the background); the suspension is released per the current foreground state.
 static void window_resized(ANativeActivity *a,ANativeWindow *w) {game_app *s=a->instance;
-    dm_touch_set(NULL,0);pad_clear(s);s->touch_needs_down=1;
+    dm_touch_set(NULL,0);dm_ui_touch(3,0,0);s->ui_finger_active=0;pad_clear(s);s->touch_needs_down=1;
     pthread_mutex_lock(&s->lock);int same_window=s->window==w;pthread_mutex_unlock(&s->lock);
     // 同一个窗口才处理：新窗口有 onNativeWindowCreated 那条路；后端还没活时也没有交换链要重建，第一次出图会自己建。
     // 重建这一拍会慢（表面/交换链重建、缓存变冷），照回前台那次一样先告诉动态分辨率控制器别把它当成 GPU 吃紧。
@@ -560,7 +585,7 @@ static void window_destroyed(ANativeActivity *a,ANativeWindow *w) {game_app *s=a
     if(atomic_load(&s->started)){settle_save();guest_clock_freeze_for(1,1);void mtl_screen_detach(void);mtl_screen_detach();LOG("[android] 窗口销毁：保留进程等待回到前台");}
     pthread_mutex_lock(&s->lock);if(s->window==w){s->window=NULL;ANativeWindow_release(w);}pthread_mutex_unlock(&s->lock);}
 static void input_created(ANativeActivity *a,AInputQueue *q) {game_app *s=a->instance;s->input=q;AInputQueue_attachLooper(q,ALooper_forThread(),0,input_ready,s);}
-static void input_destroyed(ANativeActivity *a,AInputQueue *q) {game_app *s=a->instance;AInputQueue_detachLooper(q);s->input=NULL;dm_touch_set(NULL,0);pad_clear(s);s->touch_needs_down=1;}
+static void input_destroyed(ANativeActivity *a,AInputQueue *q) {game_app *s=a->instance;AInputQueue_detachLooper(q);s->input=NULL;dm_touch_set(NULL,0);dm_ui_touch(3,0,0);s->ui_finger_active=0;pad_clear(s);s->touch_needs_down=1;}
 // 注意 onPause 里**不**挂起图形（Mac 的最小化路径有这一步，安卓不能照抄）：安卓在停下来之后一定会销毁窗口，
 // 而"请游戏存盘"排在窗口销毁之前（见 window_destroyed）。图形一旦在这里挂起，游戏线程就被挡在 NVN 入口外，
 // 请求的那次自动存盘永远等不到提交 —— 真机上就是这样，日志里只剩一条"未存盘退出"的红字。真正的挂起由
@@ -578,7 +603,7 @@ static void input_destroyed(ANativeActivity *a,AInputQueue *q) {game_app *s=a->i
 // as GPU pressure and the internal 3D ratio is scaled down; ② lifting the guest clock freeze, pairing with the
 // freeze taken when going to the background.
 static void resumed(ANativeActivity *a) {game_app *s=a->instance;atomic_store(&s->activity_resumed,1);dm_android_performance_resume();if(atomic_load(&s->started)){dm_3d_scale_resumed();dm_gfx_suspend(0);guest_clock_freeze_for(1,0);dm_audio_suspend(0);dm_focus_set(1);}}
-static void paused(ANativeActivity *a) {game_app *s=a->instance;atomic_store(&s->activity_resumed,0);dm_touch_set(NULL,0);pad_clear(s);s->touch_needs_down=1;if(atomic_load(&s->started)){dm_focus_set(3);dm_audio_suspend(1);}dm_android_performance_close();}
+static void paused(ANativeActivity *a) {game_app *s=a->instance;atomic_store(&s->activity_resumed,0);dm_touch_set(NULL,0);dm_ui_touch(3,0,0);s->ui_finger_active=0;pad_clear(s);s->touch_needs_down=1;if(atomic_load(&s->started)){dm_focus_set(3);dm_audio_suspend(1);}dm_android_performance_close();}
 static void destroyed(ANativeActivity *a) {game_app *s=a->instance;atomic_store(&s->debug_stop,1);
     // 请存盘只做一次：正常退出时 window_destroyed 一定先跑过（安卓在 Activity 停止时必然先销毁窗口），而且那时
     // 图形还没挂起、游戏跑得动，提交等得到。走到这里图形已经挂起，再请一次根本等不到提交，只会白等 3 秒再打一条

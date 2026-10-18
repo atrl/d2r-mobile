@@ -554,7 +554,7 @@ public final class LauncherActivity extends Activity {
     private void beginDownload() {
         importing = true; cancelImport = false; updateStartState();
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        setStatus(String.format(text("dmAndroidDataProgress"), 0), MUTED);
+        setStatus(text("dmAndroidDataConnecting"), MUTED);
         new Thread(() -> {
             try {
                 File directory = new File(getExternalFilesDir(null), "data-download");
@@ -565,13 +565,21 @@ public final class LauncherActivity extends Activity {
                 if (getExternalFilesDir(null).getUsableSpace() < GitHubData.TOTAL * 2 + 536870912L - Math.min(cached, GitHubData.TOTAL))
                     throw new IOException(text("dmAndroidDataSpace"));
                 File[] parts = GitHubData.download(directory, new GitHubData.Sink() {
-                    private int last = -1;
+                    private long lastUpdate;
                     public boolean cancelled() { return cancelImport; }
                     public void progress(long bytes) {
-                        int percent = (int)(bytes * 100 / GitHubData.TOTAL);
-                        if (percent == last) return;
-                        last = percent;
-                        runOnUiThread(() -> setStatus(String.format(text("dmAndroidDataProgress"), percent), MUTED));
+                        long now = android.os.SystemClock.elapsedRealtime();
+                        if (lastUpdate != 0 && now - lastUpdate < 500 && bytes != GitHubData.TOTAL) return;
+                        lastUpdate = now;
+                        String message = String.format(text("dmAndroidDataProgress"),
+                            bytes * 100.0 / GitHubData.TOTAL, bytes / 1048576.0, GitHubData.TOTAL / 1048576.0);
+                        runOnUiThread(() -> setStatus(message, MUTED));
+                    }
+                    public void phase(String phase, int attempt) {
+                        String message = "retrying".equals(phase)
+                            ? String.format(text("dmAndroidDataRetrying"), attempt)
+                            : text("verifying".equals(phase) ? "dmAndroidDataVerifying" : "dmAndroidDataConnecting");
+                        runOnUiThread(() -> setStatus(message, MUTED));
                     }
                 });
                 String summary;
