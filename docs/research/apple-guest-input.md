@@ -1,7 +1,10 @@
 # Apple Guest input experiment / Apple Guest 输入实验
 
-Status: module recovery and thread-base retargeting completed; Android loading and gameplay **not verified**.
-状态：已完成模块还原及线程基址转换；**尚未验证 Android 装载和游戏运行**。
+Status: Android candidate package assembled and CRC-validated; signed candidate APK verified. Android loading, rendering, touch and gameplay **not verified**.
+状态：Android 候选数据包已生成并通过结构及 CRC 校验，配套 APK 已通过发布签名检查；**尚未验证真机装载、画面、触控和游戏运行**。
+
+The following sections record successive research stages; the final candidate section supersedes earlier pending-download/conversion statements.
+下文按研究阶段保留过程记录，早期“待下载/待转换”状态以末尾候选包结果为准。
 
 The community's 5,424,765,988-byte split resource ZIP contains 18 `.data` files, a README and checksums. Its ZIP directory was inspected using HTTP ranges; the complete resource bodies were not downloaded or decoded. This is substantial game resource data, but the directory does not contain the Android guest libraries or a ready-to-import Android package.
 
@@ -120,3 +123,20 @@ All three downloaded parts match the publisher's SHA-256 values, and the combine
 The initial omissions included two non-locale `cain6` configurations. Local recovery found an existing identical variant and restored the state-machine configuration from its cain3 equivalent. Recompression at zlib level 9 matches the original index's 9-byte EKey hash prefix and exact encoded/decoded lengths for both files. This is validation against the index's stored prefix, not a claim to have an independently published full-file hash. The existing overlay writer placed the restored files and rebuilt indexes in `00-00000008.data`. The repaired manifest still reports 23,241 omitted entries, all under `locales/` for languages excluded by the community package; simplified-Chinese resources are present. No successful Android gameplay claim follows from this repair.
 
 三个分卷及合并 ZIP 均已通过发布者 SHA-256 校验，18 个资源档案已通过 ZIP CRC 解压。已验证恢复两个非语言配置并重建覆盖层；剩余缺失清单是社区包省略的其他语言资源。清单工具保留显式缺失报告，未将部分语言包描述为全语言完整提取。派生表和最终 Android 包仍在生成与验证中。
+
+
+## Android candidate and reproducible repair / Android 候选包与可复现修复
+
+The final subgroup-32 shaders were rebuilt from the complete, checksum-verified archive and repaired RomFS: 6,931/6,931 validation passes. Derived tables were generated. The Android data package has 6 game entries, 25 RomFS files and 20,795 shader files. Its 6,147,543,691 bytes have SHA-256 `fcafea412b26523ce25e644f9d74a64cdbdc2684e9ee3b26569e260efdb57cc5`; package structure, counts and every ZIP entry CRC passed. It retains the explicit omitted-language report. These are conversion checks, not gameplay evidence.
+
+已基于完整资源重新生成 32 分组着色器和派生表，并完成约 6.15 GB 候选数据包。配套 v0.1.0-preview.5 APK 使用原发布证书，versionCode 10012，已通过签名、对齐和应用身份检查；候选版尚未发布为实玩通过版本。当前仅连接 rk3566 开发板，vivo 折叠屏未连接。32 分组配置须匹配实际驱动，真机验证前不能确认可玩。
+
+`recover_community_overlay.py` reproduces the two omitted shared configurations using existing resources, requiring both original index lengths and the 9-byte EKey prefix to match. A second local run produced byte-identical `.build.config` and `00-00000008.data`. Synthetic tests reject changed content, hash prefixes and either length mismatch. Output links unchanged source files, so retain the source directory until packaging finishes. No game inputs or recovered content are committed.
+
+```sh
+# Explicit partial-language manifest; keep the emitted missing-path report.
+python3 dm/android/tools/recover_casc_manifest.py /path/to/romfs --manifest /path/to/romfs/data/build_manifest.psv --available-only
+python3 dm/android/tools/recover_community_overlay.py /path/to/romfs /path/to/repaired-romfs
+python3 dm/android/tools/recover_casc_manifest.py /path/to/repaired-romfs --manifest /path/to/repaired-romfs/data/build_manifest.psv --available-only
+# Use repaired-romfs for subsequent shader/table generation and packaging.
+```

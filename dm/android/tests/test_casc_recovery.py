@@ -10,6 +10,7 @@ import unittest
 import zlib
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 from recover_casc_manifest import entries, decode
+from recover_community_overlay import verify_content
 import casc_overlay
 
 
@@ -29,6 +30,20 @@ def fixture(content, encoding):
 
 
 class RecoveryTest(unittest.TestCase):
+    def test_recovered_content_requires_index_hash_and_both_lengths(self):
+        content = b'synthetic recovered config' * 20
+        encoded = zlib.compress(content, 9)
+        target = {'size': len(content), 'encoded': len(encoded),
+                  'key': casc_overlay.ekey_for(encoded, 0, 1, 0).hex()}
+        self.assertEqual(verify_content(content, target), encoded)
+        for field in ('size', 'encoded', 'key'):
+            broken = dict(target)
+            broken[field] = ('00' * 16 if field == 'key' else target[field] + 1)
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                verify_content(content, broken)
+        with self.assertRaises(ValueError):
+            verify_content(content.replace(b'config', b'broken'), target)
+
     def test_encodings_offsets_and_overlay_sizes(self):
         for encoding in ('z', 'n', 'b:64K*=n'):
             with self.subTest(encoding=encoding), tempfile.TemporaryDirectory() as directory:
