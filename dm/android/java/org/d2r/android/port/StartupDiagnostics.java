@@ -56,6 +56,8 @@ final class StartupDiagnostics {
         append(report, new File(context.getFilesDir(), "game.log"), 65536);
         append(report, new File(context.getFilesDir(), "game.previous.log"), 65536);
         append(report, new File(context.getFilesDir(), "game.older.log"), 65536);
+        // A sampled CPU-frequency/phase tail helps separate work growth from device throttling.
+        append(report, new File(context.getFilesDir(), "abnormal-frames.log"), 16384);
         return report.toString();
     }
 

@@ -159,6 +159,7 @@ def main():
             report("%s（%s）" % (label, test), result.returncode == 0,
                    (result.stdout or "").strip().splitlines()[-1] if result.stdout else "")
 
+        compile_and_run("Bounded slow-frame diagnostics", [ROOT / "tests/frame_diagnostics_test.c"], workspace / "frame_diagnostics", ("-O2",))
         compile_and_run("Crash address mappings", [ROOT / "tests/crash_maps_test.c"], workspace / "crash_maps", ("-Wall", "-Wextra", "-Werror"))
         compile_and_run("Fold viewport and touch mapping", [ROOT / "tests/viewport_test.c"], workspace / "viewport",
                         ("-std=c11", "-Wall", "-Wextra", "-Werror", "-I", ROOT / "native"))

@@ -53,6 +53,10 @@ static int dm_abnormal_failed;
 static uint64_t dm_abnormal_previous_ns[DM_CPU_PHASE_COUNT],dm_abnormal_previous_calls[DM_CPU_PHASE_COUNT];
 static uint64_t dm_abnormal_frame_ns[DM_CPU_PHASE_COUNT],dm_abnormal_frame_calls[DM_CPU_PHASE_COUNT];
 static uint64_t dm_abnormal_frames, dm_abnormal_records;
+static uint64_t dm_abnormal_last_sample, dm_abnormal_suppressed, dm_abnormal_suppressed_max;
+// Sustained slow frames must not turn diagnostic sysfs reads and flushes into per-frame work.
+// Keep the existing per-frame counters; sample details at most twice per second.
+enum { DM_ABNORMAL_SAMPLE_NS = 500000000, DM_ABNORMAL_FILE_LIMIT = 4 * 1024 * 1024 };
 static void dm_abnormal_open(void) {
     if (dm_abnormal_file || dm_abnormal_failed) return;
     const char *directory = getenv("DM_DATA");
@@ -128,9 +132,27 @@ static void dm_abnormal_frame(uint64_t frame, uint64_t interval_ns, uint64_t cpu
     uint64_t frame_ubo_bytes = ubo_bytes - previous_ubo_bytes, frame_ubo_misses = ubo_misses - previous_ubo_misses, frame_descriptor_misses = descriptor_misses - previous_descriptor_misses;
     previous_ubo_bytes = ubo_bytes; previous_ubo_misses = ubo_misses; previous_descriptor_misses = descriptor_misses;
     if (interval_ns < DM_ABNORMAL_INTERVAL_NS && cpu_ns < DM_ABNORMAL_INTERVAL_NS) return;
+    uint64_t sample_now = dm_android_clock_ns(CLOCK_MONOTONIC);
+    if (dm_abnormal_records && sample_now >= dm_abnormal_last_sample &&
+        sample_now - dm_abnormal_last_sample < DM_ABNORMAL_SAMPLE_NS) {
+        dm_abnormal_suppressed++;
+        if (interval_ns > dm_abnormal_suppressed_max) dm_abnormal_suppressed_max = interval_ns;
+        return;
+    }
     dm_abnormal_open();
     if (!dm_abnormal_file) return;
+    // Bound session-to-session disk growth; this stream is only owned by the present path.
+    if (ftell(dm_abnormal_file) >= DM_ABNORMAL_FILE_LIMIT) {
+        if (fflush(dm_abnormal_file) || ftruncate(fileno(dm_abnormal_file), 0)) {
+            fclose(dm_abnormal_file); dm_abnormal_file = NULL; dm_abnormal_failed = 1; return;
+        }
+        rewind(dm_abnormal_file);
+    }
+    dm_abnormal_last_sample = sample_now;
     dm_abnormal_records++;
+    fprintf(dm_abnormal_file, "sample_interval_ms=500 suppressed=%llu suppressed_max_interval_ms=%.3f\n",
+            (unsigned long long)dm_abnormal_suppressed, dm_abnormal_suppressed_max / 1e6);
+    dm_abnormal_suppressed = dm_abnormal_suppressed_max = 0;
     fprintf(dm_abnormal_file, "帧 %llu 间隔 %.2f ms CPU %.2f ms GPU %.2f ms 绘制 %llu 通道 %llu 贴图上传 %llu UBO读取 %.0f KiB/变更 %llu 描述符未命中 %llu 本核 %ld kHz 最快核 %ld kHz\n",
             (unsigned long long)frame, interval_ns / 1e6, cpu_ns / 1e6, gpu_ns / 1e6,
             (unsigned long long)frame_draws, (unsigned long long)frame_passes, (unsigned long long)frame_uploads,
