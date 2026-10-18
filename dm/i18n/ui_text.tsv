@@ -485,3 +485,18 @@ dmAndroidGpuRepairSpace	请预留至少 700 MB 空间安装兼容补丁。	Reser
 dmAndroidGpuRepairProgress	兼容补丁 %.2f%% · 已下载 %.1f MiB	Compatibility patch %.2f%% · %.1f MiB downloaded	Android launcher
 dmAndroidGpuRepairInstalling	正在安装图形兼容补丁，请保持应用在前台…	Installing graphics compatibility data; keep the app in the foreground…	Android launcher
 dmAndroidGpuRepairDone	兼容补丁已安装，已选择系统驱动。请点击启动游戏。	Compatibility patch installed and system driver selected. Start the game now.	Android launcher
+dmAndroidAutoTitle	自动发送诊断	Automatic diagnostics	Android launcher
+dmAndroidAutoNotice	粘贴本次调试的接收地址并开启。应用进程运行时每 30 秒发送设备信息和最近三次游戏日志；崩溃后重新打开应用会继续发送。不上传存档或游戏资源，日志可能包含角色名和本地路径。可随时在此关闭。临时地址失效后需更换。	Paste the diagnostic receiver address to enable uploads every 30 seconds while the app process runs, resuming on reopen after a crash. Sends device details and the last three game logs, not saves or game resources. Logs may contain character names and local paths. Disable here at any time; replace expired temporary addresses.	Android launcher
+dmAndroidAutoEnable	开启自动发送	Enable automatic upload	Android launcher
+dmAndroidAutoDisable	关闭自动发送	Disable automatic upload	Android launcher
+dmAndroidAutoEnabled	自动诊断已开启，每 30 秒发送一次。	Automatic diagnostics enabled, every 30 seconds.	Android launcher
+dmAndroidAutoSent	最近发送成功	Last upload succeeded	Android launcher
+dmAndroidAutoFailed	最近发送失败，将自动重试；请检查网络或接收地址是否过期。	Last upload failed; retrying automatically. Check network or whether the address has expired.	Android launcher
+dmAndroidAutoInvalid	请粘贴完整的本次调试 HTTPS 接收地址。	Paste the complete HTTPS diagnostic receiver address.	Android launcher
+dmAndroidScreenAspect	自适应宽屏（内屏保留完整画面，重启生效）	Adaptive widescreen (inner screen keeps full picture; restart)	Android launcher
+dmAndroidTouchToggle	展开或收起操作键；长按查看触屏提示	Show or hide controls; hold for touch help	Android 触控入口
+dmAndroidTouchExpand	操作	Keys	Android 触控入口
+dmAndroidTouchCollapse	收起	Hide	Android 触控入口
+dmAndroidTouchWorldHint	点地面移动，点目标交互；技能和药水可点底部栏。右侧「操作」展开按键，长按查看提示。	Tap ground to move or a target to interact. Tap skills and potions on the bottom bar. Keys opens controls; hold it for help.	Android 首次局内提示
+dmAndroidTouchPanelHint	直接点选页签和物品，双击使用或装备，拖动物品整理；右侧可展开备用按键。	Tap tabs and items, double-tap to use or equip, drag to arrange. Open Keys for fallback controls.	Android 首次面板提示
+dmAndroidTouchMenuHint	直接点击菜单；右侧「操作」可展开备用按键，长按查看提示。	Tap menu entries directly. Keys opens fallback controls; hold it for help.	Android 首次菜单提示

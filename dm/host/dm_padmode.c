@@ -163,6 +163,10 @@ void dm_padmode_boot(void) {   // 开机：游戏建面板之前（main.c，nnMa
     if (!m || !getenv("DM_ROMFS_OVERLAY")) return;
     if (!dm_overlay_file("ctrl_touch", mk, sizeof mk)) { LOG("手柄 / 触屏布局：覆盖层没有 ctrl_touch 标记，照原版布局"); return; }
     int pad = getenv("DM_APP") != NULL;   // Mac App：没有触屏圆钮与底栏的绘制层，开机就用原版手柄版（我们的功能页在手柄版布局里同样有），之后也不切 | Mac App: there is no drawing layer for the touch buttons and bottom bar, so it starts in the original gamepad UI (our feature pages exist in the gamepad layout as well) and never switches afterwards
+#ifdef __ANDROID__
+    // Android reuses the visible game HUD as touch targets; the iOS-only drawn skill bar is absent.
+    pad = 1;
+#endif
 #if TARGET_OS_OSX
     g_app = pad; g_kbd_have = pad && dm_overlay_file("kbd_glyphs", mk, sizeof mk); g_kbd = g_kbd_next = g_kbd_have; atomic_store(&g_kbd_want, g_kbd);   // Mac App 开机先用键盘键帽（多数人没接手柄）；实体手柄一有输入就换 | the Mac App starts with keyboard key caps (most people have no gamepad connected); it switches as soon as a physical gamepad has input
     if (pad) LOG("手柄 / 触屏布局：键盘键帽 %d", g_kbd_have);

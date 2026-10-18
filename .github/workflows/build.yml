@@ -92,16 +92,12 @@ jobs:
           **首次安装：下载下方带版本号、以 `-arm64.apk` 结尾的安装包。**
           请使用手机浏览器完成下载，再到手机“文件管理 → 下载”打开 APK；如系统询问，请允许该来源安装应用。不要在聊天窗口中预览安装包。
           `D2R-Android-port.apk` 是内容相同的更新兼容入口，两个 APK 只需下载一个。ZIP、SHA256SUMS 和 signature.txt 都不是安装包。
-          本版数据下载最多使用四个并发连接并显示实时速率，保留已有分卷续传和 SHA-256 校验；本机小块采样四连接快于串行，但不保证手机上的提速倍数。保留选角菜单点击修正、小数百分比、已下载 MiB 及连接/重试/校验状态。GitHub 网络不可达仍需排查；vivo 实机尚未验证。
-          新增“启动错误与诊断 → 导出诊断报告”，可导出设备型号、Android 退出记录、启动配置和游戏日志尾部。若启动后返回设置，请先导出报告；此版提供故障取证，不宣称已修复 vivo 启动退出。覆盖安装后无需重新下载数据。
-          vivo V2436A / Android 16 的日志确认：系统 Adreno 750 驱动使用 subgroup64，原数据包使用 subgroup32，启动因此主动中止。本版新增“修复系统驱动兼容性”，仅下载约 142 MB 的匹配着色器补丁并保留现有游戏与存档。安装补丁后使用系统驱动再启动；无需重新下载 6 GB 数据。所有 6931 个补丁着色器已校验，真实 vivo 运行仍待复测。
-          preview.12：已装兼容补丁时，内置 Turnip 改用显式 subgroup64（vivo 实测该驱动范围64..128，不支持32）。系统驱动已通过子组校验但后续出现 SIGSEGV，根因尚待崩溃地址映射确认。本版支持切换 Turnip 对照，并保留最近三次日志及崩溃地址所属库。已有补丁无需重下；不宣称已验证 vivo 可以游戏。
-          首次安装仍需选择“下载游戏数据”。
-          应用直接从 GitHub 下载约 6.15 GB 数据，逐卷校验 SHA-256 并自动导入；无需电脑或手动合并。首次安装请预留 13 GB 空间，建议使用 Wi-Fi 并保持应用在前台。下载中断后再次点击可续传。
-          APK 与数据独立更新，覆盖安装 APK 保留已导入的数据。启动器内“检查 GitHub 更新”支持本仓库的预览版。
-          数据引用 preview.5 的固定校验版本，因此该发布需保留；打包工具 ZIP 是开发工具，普通安装无需下载。
-          **兼容性测试版：已在 Android 模拟器创建角色、进入营地并验证摇杆移动；战斗、vivo 折叠屏实机和温控测试仍未完成。**
-          Android 15 x86 模拟器已验证 ARM64 安装与完整数据导入；修正 NVN 计数跳板的原子指令兼容问题，对缺少写异常元数据的 x86 翻译环境关闭脏页写保护。
-          Download the APK, then use Download game data in the launcher. About 6.15 GB is downloaded and imported automatically. Reserve 13 GB and keep the app in the foreground. Interrupted downloads can resume. Camp entry and touch movement work in the emulator; combat and vivo fold hardware validation remain incomplete.
+          preview.13：接入公共触摸手势，支持直接点菜单、背包物品/页签及游戏目标；使用游戏自身的技能和药水栏。备用手柄键默认收起，点击侧边“操作”展开，长按查看提示。场景切换自动收起，首次进入场景显示一次提示；折叠内屏优先把备用控件放在黑边。
+          新增“自适应宽屏”分辨率选项：宽屏按当前比例渲染；窄屏/折叠内屏保持完整16:9画面，不拉伸、不裁切。方形原生渲染在测试中触发裁剪错误，因此本版不启用。切换屏幕后重新启动可重新计算分辨率。
+          新增默认关闭的“自动发送诊断”：填写私下提供的调试接收地址并开启后，每30秒上传设备信息和近期日志，可随时关闭，不传存档或游戏资源；日志可能含角色名和本地路径。进程崩溃后需重开启动器才能补传，临时通道重启后地址需更新。
+          vivo V2436A用户已确认preview.12内置Turnip可运行，系统驱动仍会退出。已有subgroup64兼容补丁请保留，继续使用内置Turnip；无需重新下载补丁或游戏数据。
+          首次安装：在启动器选择“下载游戏数据”，约6.15 GB，预留13 GB空间。支持最多四连接、速率显示、续传和SHA-256校验。APK与数据独立更新，覆盖安装保留数据/存档；“检查GitHub更新”支持预览版。数据引用preview.5固定资源，需保留该发布。
+          验证：28组Linux检查通过，含33项公共触摸回归断言；Android15模拟器已通过触摸进入营地、点传送点走近并交互、药水栏命中。vivo真机的新触屏交互、折叠切换、温控和完整战斗仍需验证。
+          Download the versioned arm64 APK and install over the existing app. No game-data redownload is needed. Touch uses the shared menu/inventory/world adapter; optional controls collapse into an edge entry. Inner screens preserve the full picture with letterboxing. Automatic diagnostics is opt-in. Real vivo touch/fold acceptance remains pending.
           EOF
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --title "D2R Android $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" dist/*

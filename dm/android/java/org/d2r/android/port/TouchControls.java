@@ -15,6 +15,8 @@ import android.view.View;
 import android.util.Log;
 import android.view.WindowInsets;
 import android.widget.PopupWindow;
+import android.widget.TextView;
+import android.widget.Toast;
 import java.util.ArrayList;
 
 final class TouchControls {
@@ -25,14 +27,38 @@ final class TouchControls {
     private final TouchPadState state = new TouchPadState();
     private final ArrayList<ControlView> groups = new ArrayList<>();
     private float density;
+    private final float gameAspect;
     private final View.OnLayoutChangeListener layoutListener;
-    private boolean visible, destroyed;
+    private boolean visible, destroyed, expanded;
+    private final TextView handle;
+    private final PopupWindow handleWindow;
+    private int scene = -1;
+    private final Runnable scenePoll = new Runnable() {
+        @Override public void run() {
+            if (!visible || destroyed) return;
+            int next = D2RActivity.touchScene();
+            if (next != scene) {
+                scene = next; expanded = false; releaseAll(); layout();
+                String key = scene == 1 ? "dmAndroidTouchWorldHint" : scene == 2 ? "dmAndroidTouchPanelHint" : "dmAndroidTouchMenuHint";
+                android.content.SharedPreferences prefs = activity.getSharedPreferences("touch-hints", 0);
+                if (!prefs.getBoolean(key, false)) {
+                    Toast.makeText(activity, text(key), Toast.LENGTH_LONG).show();
+                    prefs.edit().putBoolean(key, true).apply();
+                }
+            }
+            decor.postDelayed(this, 250);
+        }
+    };
     private int previousWidth, previousHeight;
     private long publishedButtons;
     private int publishedX, publishedY;
 
     TouchControls(Activity activity, Listener listener) {
         this.activity = activity;
+        float aspect=16f/9f;
+        String resolution=LaunchSettings.read(new java.io.File(activity.getFilesDir(),"temp/launch-settings.conf"),"resolution");
+        if(resolution!=null)try {String[] parts=resolution.split("x");int w=Integer.parseInt(parts[0]),h=Integer.parseInt(parts[1]);if(w>0&&h>0)aspect=(float)w/h;}catch(RuntimeException ignored){}
+        gameAspect=aspect;
         this.decor = activity.getWindow().getDecorView();
         this.listener = listener;
         density = activity.getResources().getDisplayMetrics().density;
@@ -58,6 +84,19 @@ final class TouchControls {
             new Key(TouchPadState.PLUS, "Plus", 84, 28, 24, 0xffd5cfc1),
             new Key(TouchPadState.LS, "LS", 140, 28, 24, 0xffd5cfc1),
             new Key(TouchPadState.RS, "RS", 196, 28, 24, 0xffd5cfc1)));
+        handle = new TextView(activity);
+        handle.setTextColor(0xffeee7d8); handle.setTextSize(12); handle.setGravity(Gravity.CENTER);
+        handle.setBackgroundColor(0x990b0c0d);
+        handle.setContentDescription(text("dmAndroidTouchToggle"));
+        handleWindow = new PopupWindow(handle, 1, 1, false);
+        handleWindow.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        handleWindow.setTouchModal(false); handleWindow.setSplitTouchEnabled(true);
+        handleWindow.setInputMethodMode(PopupWindow.INPUT_METHOD_NOT_NEEDED);
+        handle.setOnClickListener(v -> { expanded = !expanded; releaseAll(); layout(); });
+        handle.setOnLongClickListener(v -> {
+            Toast.makeText(activity, text(scene == 1 ? "dmAndroidTouchWorldHint" : scene == 2 ? "dmAndroidTouchPanelHint" : "dmAndroidTouchMenuHint"), Toast.LENGTH_LONG).show();
+            return true;
+        });
         layoutListener = (v, l, t, r, b, oldL, oldT, oldR, oldB) -> layout();
         decor.addOnLayoutChangeListener(layoutListener);
     }
@@ -73,10 +112,12 @@ final class TouchControls {
             " attached=" + decor.isAttachedToWindow());
         if (destroyed) return;
         visible = value;
-        if (value) decor.post(this::layout);
+        decor.removeCallbacks(scenePoll);
+        if (value) { decor.post(this::layout); decor.post(scenePoll); }
         else {
             releaseAll();
             for (ControlView group : groups) group.popup.dismiss();
+            handleWindow.dismiss();
         }
     }
 
@@ -141,19 +182,35 @@ final class TouchControls {
                 safeBottom = Math.max(safeBottom, cutout.getSafeInsetBottom());
             }
         }
+        int handleSize = Math.max(32, Math.round(40 * density));
+        int handleX = Math.max(safeLeft, width - safeRight - handleSize);
+        float pictureHeight = Math.min(height, width / gameAspect);
+        float topBar = (height - pictureHeight) / 2;
+        int handleY = topBar - safeTop >= handleSize ? Math.round(safeTop + (topBar - safeTop - handleSize) / 2) :
+            Math.max(safeTop, Math.min(height - safeBottom - handleSize, height / 2 - handleSize / 2));
+        handle.setText(text(expanded ? "dmAndroidTouchCollapse" : "dmAndroidTouchExpand"));
+        if (handleWindow.isShowing()) handleWindow.update(handleX, handleY, handleSize, handleSize);
+        else { handleWindow.setWidth(handleSize); handleWindow.setHeight(handleSize); handleWindow.showAtLocation(decor, Gravity.TOP | Gravity.LEFT, handleX, handleY); }
+        if (!expanded) {
+            for (ControlView group : groups) group.popup.dismiss();
+            return;
+        }
+        // Match the rendered picture and use letterbox space for optional controls.
+
+        float gameWidth = width, gameHeight = width / gameAspect;
+        if (gameHeight > height) { gameHeight = height; gameWidth = height * gameAspect; }
+        float gameLeft = (width - gameWidth) / 2, gameTop = (height - gameHeight) / 2;
+        float gameBottom = gameTop + gameHeight;
         float scale = Math.min(1, Math.min((width - safeLeft - safeRight) / (640 * density),
             (height - safeTop - safeBottom) / (360 * density)));
         // 高密度手机横屏较矮，限制最大按键组占高；平板原有尺寸保持可用。
         // Cap control height on dense phones while retaining existing tablet sizing.
         scale = Math.min(scale, (height - safeTop - safeBottom) * .36f / (184 * density));
+        float bottomSpace = height - safeBottom - gameBottom;
+        if (bottomSpace >= 96 * density)
+            scale = Math.min(scale, bottomSpace / (216 * density));
         for (ControlView group : groups) group.unit = density * scale;
         float margin = 16 * density * scale;
-        // 与原生前端相同的 16:9 居中画面；短按键优先放到上下黑边。
-        // Use the native frontend's centered 16:9 viewport; place the compact keys in letterbox space first.
-        float gameWidth = width, gameHeight = width * 9f / 16f;
-        if (gameHeight > height) { gameHeight = height; gameWidth = height * 16f / 9f; }
-        float gameLeft = (width - gameWidth) / 2, gameTop = (height - gameHeight) / 2;
-        float gameBottom = gameTop + gameHeight;
         ControlView stick = groups.get(0), face = groups.get(1);
         float low = height - safeBottom - margin;
         float baseBottom = low - gameBottom >= Math.max(stick.pixelHeight(), face.pixelHeight()) + margin ? low :
@@ -165,9 +222,9 @@ final class TouchControls {
             baseBottom - face.pixelHeight());
         ControlView leftShoulder = groups.get(2), rightShoulder = groups.get(3);
         leftShoulder.place(stick.windowX + (stick.pixelWidth() - leftShoulder.pixelWidth()) / 2,
-            Math.max(safeTop + margin, stick.windowY - margin - leftShoulder.pixelHeight()));
+            gameTop - safeTop >= leftShoulder.pixelHeight() + margin * 2 ? safeTop + margin : Math.max(safeTop + margin, stick.windowY - margin - leftShoulder.pixelHeight()));
         rightShoulder.place(face.windowX + (face.pixelWidth() - rightShoulder.pixelWidth()) / 2,
-            Math.max(safeTop + margin, face.windowY - margin - rightShoulder.pixelHeight()));
+            gameTop - safeTop >= rightShoulder.pixelHeight() + margin * 2 ? safeTop + margin : Math.max(safeTop + margin, face.windowY - margin - rightShoulder.pixelHeight()));
         ControlView dpad = groups.get(4), menu = groups.get(5);
         float compactY = low - gameBottom >= menu.pixelHeight() ?
             gameBottom + (low - gameBottom - menu.pixelHeight()) / 2 :

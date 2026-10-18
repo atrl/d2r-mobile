@@ -3,8 +3,10 @@
 #include <math.h>
 int main(void) {
     const int windows[][2] = {{2480,2200},{2748,1172},{1172,2748},{800,600},{400,900},{1,1},{0,0}};
+    const int sources[][2]={{16,9},{1600,720},{1000,900}};
+    for(unsigned source=0;source<3;source++)
     for (unsigned i=0; i<sizeof windows/sizeof windows[0]; i++) {
-        int w=windows[i][0],h=windows[i][1]; dm_viewport v=dm_viewport_fit(w,h,16,9);
+        int w=windows[i][0],h=windows[i][1]; dm_viewport v=dm_viewport_fit(w,h,sources[source][0],sources[source][1]);
         assert(v.x>=0 && v.y>=0 && v.x+v.width<=w && v.y+v.height<=h);
         float x,y;
         if (v.width && v.height) {

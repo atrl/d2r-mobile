@@ -58,6 +58,7 @@ public final class D2RActivity extends NativeActivity {
     // LauncherActivity.stepAsideForRunningGame). One process hosts one guest, so it also means "this session is live".
     static volatile boolean hostRunning;
     private static native void onTextResult(long request, String text, boolean accepted);
+    static native int touchScene();
     private static native void onTouchPad(long buttons, int leftX, int leftY, int rightX, int rightY);
     private static native void setOverlayEnabled(boolean enabled);
     private static native void setQualityPreset(int preset);
@@ -374,6 +375,8 @@ public final class D2RActivity extends NativeActivity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        AutoDiagnostics.start(this);
+        immersive();
         // 标记与活动的「创建 / 销毁」这一对绑定，语义就是"这个进程里还住着一个游戏活动"。
         // The flag is paired with activity creation/destruction: it means "a game activity still lives in this process".
         hostRunning = true;
@@ -506,7 +509,15 @@ public final class D2RActivity extends NativeActivity {
 
     @Override public void onWindowFocusChanged(boolean focus) {
         super.onWindowFocusChanged(focus);
+        if (focus) immersive();
         updateTouchVisibility();
+    }
+
+    private void immersive() {
+        getWindow().getDecorView().setSystemUiVisibility(android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | android.view.View.SYSTEM_UI_FLAG_FULLSCREEN | android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        android.view.WindowManager.LayoutParams params=getWindow().getAttributes();
+        params.layoutInDisplayCutoutMode=android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        getWindow().setAttributes(params);
     }
 
     public void updateDebug(String text) {
