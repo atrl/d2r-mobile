@@ -89,6 +89,10 @@ jobs:
           Android preview for vivo X Fold5. APK includes no game data; import your own prepared package.
           Foldable window handling and a no-data touch/surface check are included.
           No X Fold5 gameplay or thermal validation has been performed. See docs/ANDROID_FOLD.md for installation and acceptance status.
-          APK 为预览版，不含游戏数据。尚未完成 X Fold5 实玩与温控验证。
+          **首次安装必读：这个约 20 MB 的 APK 不是完整游戏。**
+          没有游戏数据时不能开始游戏。需要自己的 Switch 版 D2R 本体、对应更新与 prod.keys，在电脑用本发布的打包套件生成 d2r-package.zip，再传到手机导入。PC 版目录不能直接导入。
+          缺少数据时点击启动会显示准备说明。APK 可覆盖本 fork 的旧预览版安装。
+          数据准备：https://github.com/atrl/d2r-mobile/blob/main/dm/android/kit/README.zh-CN.md
+          尚未完成 X Fold5 实玩与温控验证。
           EOF
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --title "D2R Android $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" dist/*

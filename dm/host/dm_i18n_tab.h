@@ -461,4 +461,5 @@ static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {
     { "dmAndroidSaveNone", "还没有存档可以导出", "There is no save to export yet" },
     { "dmAndroidSaveWorking", "正在处理存档…", "Working on the save…" },
     { "dmAndroidFoldDiagnostic", "折叠屏与触控自检（无需游戏数据）", "Fold and touch check (no game data)" },
+    { "dmAndroidLaunchSetupHelp", "APK 仅包含运行程序，不包含游戏。\n\n需要你自己的 Switch 版暗黑破坏神 II：重制版本体、对应更新及 prod.keys，在电脑上用发布页的打包套件生成 d2r-package.zip，然后传到手机并选择“导入数据包”。PC 版安装目录不能直接导入。\n\n尚无游戏文件时只能使用折叠屏与触控自检。已有生成的数据包可点下方按钮选择。", "The APK contains the runtime, not the game.\n\nUse your own Switch version of Diablo II: Resurrected, its matching update and prod.keys with the packaging kit from the release page on a computer to create d2r-package.zip. Copy it to your phone and import it. A PC installation folder cannot be imported directly.\n\nWithout game files, only the fold and touch diagnostic is available. If you already have a prepared package, select it below." },
 };

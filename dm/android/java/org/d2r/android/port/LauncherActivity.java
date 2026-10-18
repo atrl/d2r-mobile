@@ -274,12 +274,12 @@ public final class LauncherActivity extends Activity {
         write(stateFile(), content.toString());
     }
 
-    // 没有数据包就把"启动游戏"置灰：点了会失败的事不该看起来能点。
-    // Without a package the start entry greys out: something that would fail should not look available.
+    // 缺少数据时仍允许点击以显示准备说明；只有导入进行中禁用。
+    // Keep the entry actionable for setup guidance when data is missing; disable only during import.
     private void updateStartState() {
         boolean ready = packageReady() && !importing;
-        startItem.setEnabled(ready);
-        startItem.setTextColor(ready ? GOLD : MUTED);
+        startItem.setEnabled(!importing);
+        startItem.setTextColor(ready ? GOLD : PARCHMENT);
     }
 
     // 把当前内存里的设置反映到界面上。点一下之后只调这个，**绝不重新读盘** ——
@@ -402,6 +402,7 @@ public final class LauncherActivity extends Activity {
 
         refreshFromDisk();
         setContentView(root);
+        if (!packageReady()) setStatus(text("dmAndroidLaunchNeedsImport"), WARNING);
     }
 
     @Override protected void onResume() {
@@ -600,6 +601,12 @@ public final class LauncherActivity extends Activity {
         }
         if (!packageManifest().isFile()) {
             setStatus(text("dmAndroidLaunchNeedsImport"), WARNING);
+            new AlertDialog.Builder(this)
+                .setTitle(text("dmAndroidLaunchImport"))
+                .setMessage(text("dmAndroidLaunchSetupHelp"))
+                .setPositiveButton(text("dmAndroidLaunchImport"), (dialog, which) -> pickPackage())
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
             return;
         }
         // 先把驱动准备好（选内置 Turnip 就把 .so 复制到内部可执行目录并写 gpu-driver.conf，选系统驱动就删掉它）。
