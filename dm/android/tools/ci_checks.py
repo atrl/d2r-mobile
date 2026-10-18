@@ -109,6 +109,7 @@ def main():
         # 版本折算：Android 拒绝版本号倒退的安装，这条规则要有回归挡住。
         # The version mapping: Android refuses an install whose version code goes backwards, so it needs a regression.
         python_check("APK 版本折算（test_version）", "dm/android/tests/test_version.py")
+        python_check("Explicit driver shader profile", "dm/android/tests/test_driver_profile.py")
         python_check("Shader subgroup selection", "dm/android/tests/test_shader_profile.py")
         python_check("Install bundle", "dm/android/tests/test_install_bundle.py")
         python_check("Apple guest recovery", "dm/android/tests/test_apple_guest.py")
@@ -150,6 +151,7 @@ def main():
             report("%s（%s）" % (label, test), result.returncode == 0,
                    (result.stdout or "").strip().splitlines()[-1] if result.stdout else "")
 
+        compile_and_run("Crash address mappings", [ROOT / "tests/crash_maps_test.c"], workspace / "crash_maps", ("-Wall", "-Wextra", "-Werror"))
         compile_and_run("Fold viewport and touch mapping", [ROOT / "tests/viewport_test.c"], workspace / "viewport",
                         ("-std=c11", "-Wall", "-Wextra", "-Werror", "-I", ROOT / "native"))
         compile_and_run("Upstream texture copy pitch", [REPO / "dm/gfx/tests/t_copy_pitch.c"], workspace / "copy_pitch")

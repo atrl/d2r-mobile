@@ -206,7 +206,10 @@ static void copy_asset(ANativeActivity *a,const char *directory,const char *name
 static void *boot(void *argument) {
     game_app *s=argument;pthread_mutex_lock(&s->lock);while(!s->window&&!s->stop)pthread_cond_wait(&s->ready,&s->lock);int stop=s->stop;pthread_mutex_unlock(&s->lock);if(stop)return NULL;
     char path[1024],metadata[1024],log[1024];snprintf(metadata,sizeof metadata,"%s/game",s->activity->internalDataPath);mkdir(metadata,0700);
-    snprintf(log,sizeof log,"%s/game.log",s->activity->internalDataPath);int fd=open(log,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0600);if(fd>=0){dup2(fd,STDERR_FILENO);dup2(fd,STDOUT_FILENO);close(fd);}
+    snprintf(log,sizeof log,"%s/game.log",s->activity->internalDataPath);
+    char previous[1100],older[1100];snprintf(previous,sizeof previous,"%s/game.previous.log",s->activity->internalDataPath);snprintf(older,sizeof older,"%s/game.older.log",s->activity->internalDataPath);
+    rename(previous,older);rename(log,previous);
+    int fd=open(log,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0600);if(fd>=0){dup2(fd,STDERR_FILENO);dup2(fd,STDOUT_FILENO);close(fd);}
     // ART 查询只在游戏开跑前的真实宿主 pthread 上进行；失败保留0，不伪造屏幕信息。
     // Query ART on the real host pthread before starting the guest; retain zero on failure rather than invent display information.
     {

@@ -4,6 +4,9 @@
 // Crash state: prints the faulting address, pc, lr (converted to module-relative offsets) and the registers; dispatches page fault hooks.
 // Only signal handling itself lives here: diagnostic features (probes / UI messages / sampling) are in diag.c, and this file does not depend on them (the graphics unit tests link only this file).
 #include "dm.h"
+#ifdef __ANDROID__
+#include "dm_crash_maps.h"
+#endif
 #include <signal.h>
 #include <dlfcn.h>
 #include <sys/ucontext.h>
@@ -194,6 +197,9 @@ static void on_crash(int sig, siginfo_t *si, void *uc_) {
     fprintf(stderr, " sp=%#llx\n", (unsigned long long)DM_UC_SP(uc));
     for (int i = 0; i < 29; i++) fprintf(stderr, "x%d=%#llx%s", i, (unsigned long long)DM_UC_REG(uc, i), i % 6 == 5 ? "\n" : " ");
     fprintf(stderr, "\n");
+#ifdef __ANDROID__
+    dm_crash_maps(STDERR_FILENO,DM_UC_PC(uc),DM_UC_LR(uc));
+#endif
     dm_backtrace(DM_UC_FP(uc));
     if (g_dump_hook) g_dump_hook();
     _exit(128 + sig);

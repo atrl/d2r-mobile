@@ -42,6 +42,8 @@ final class StartupDiagnostics {
             append(report, new File(external, "d2r-package/shaders/subgroup64/host-subgroup-size.txt"), 32);
         }
         append(report, new File(context.getFilesDir(), "game.log"), 65536);
+        append(report, new File(context.getFilesDir(), "game.previous.log"), 65536);
+        append(report, new File(context.getFilesDir(), "game.older.log"), 65536);
         return report.toString();
     }
 

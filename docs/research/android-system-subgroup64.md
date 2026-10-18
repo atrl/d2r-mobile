@@ -7,3 +7,11 @@ Provide a separate translated subgroup64 cache with 6931 keys matching subgroup3
 The launcher uses existing SHA-pinned resumable download with retries, then bounded flat-path extraction into a staging folder, validates file pairs/profile/count and atomically renames to shaders/subgroup64. The base cache, ROMFS and saves remain untouched. Successful installation selects the system driver. Runtime selects the separate variant only when effective shader execution is64 and the base profile differs; missing or mismatching variant profiles fail clearly. The pipeline disk namespace already includes effective subgroup size.
 
 Tests: 22 Linux checks pass, including actual native selector extraction and archive traversal/incomplete-publication regressions. Real converted patch extraction is checked separately. Device gameplay after this change is not yet verified on vivo; the next report must show subgroup64 matching, then evidence of reaching character selection and entering gameplay.
+
+## Follow-up on vivo preview.11
+
+The next user report confirms the system driver selects the subgroup64 variant, builds four warmup pipelines and reaches main-menu initialization. It then exits139 with SIGSEGV at address0x48; PC0x76ef4b2e84 and LR0x76ef33b048 are outside the reported guest module ranges. Without process mappings this does not identify the containing native library. Last shader-load log is compute key098a126f92bf533a; temporal proximity alone does not prove it caused the fault.
+
+A separate Turnip report confirms PurpleVK API1.4 defaults to128 and permits explicit sizes64..128. Requesting32 aborts validation. When the already-installed64 variant is present, the launcher now requests64 for Turnip; driver validation checks the corresponding variant without weakening size validation. This enables a device-side comparison; it does not establish the root cause of the system driver SIGSEGV.
+
+Crash diagnostics now print the /proc/self/maps entries containing PC/LR using bounded stack buffers and signal-safe POSIX I/O, avoiding the dynamic-loader lock. Startup rotates game.log through game.previous.log and game.older.log, and export includes bounded tails of all three. Tests exercise the actual driver profile validation function and a real signal invoking the address-map helper. Real Turnip64 gameplay on vivo remains pending.
