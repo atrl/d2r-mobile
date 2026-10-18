@@ -5,7 +5,14 @@
 #include <ctype.h>
 #include <time.h>
 typedef struct { const char *name; void *fn; } hle_ent;
-#define L(n) __attribute__((used, section("__DATA,swhle"))) static const hle_ent hle_lib_##n = { #n, (void *)n };
+#ifdef __ANDROID__
+#define LIBC_SECTION "dm_hle"
+#define LIBC_RETAIN retain,
+#else
+#define LIBC_SECTION "__DATA,swhle"
+#define LIBC_RETAIN
+#endif
+#define L(n) __attribute__((used, LIBC_RETAIN section(LIBC_SECTION), aligned(sizeof(void *)))) static const hle_ent hle_lib_##n = { #n, (void *)n };
 L(memcpy) L(memset) L(memmove) L(memcmp) L(memchr) L(strlen) L(strnlen) L(strcmp) L(strncmp)
 L(strcpy) L(strncpy) L(strcat) L(strncat) L(strchr) L(strrchr) L(strstr) L(strspn) L(strcspn)
 L(strpbrk) L(strcasecmp) L(strncasecmp) L(atoi) L(atof) L(strtol) L(strtoul) L(strtoll) L(strtoull)

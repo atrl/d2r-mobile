@@ -8,8 +8,15 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef __ANDROID__
+#include <dlfcn.h>
+#include "../android/native/host_sections.h"
+#include "../android/native/runtime.h"
+#include "../android/native/host_tls.h"
+#else
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
+#endif
 #include "hle.h"
 
 module_t g_mod[MAX_MOD];
@@ -37,16 +44,26 @@ static void create_keys(void) {
         pthread_key_create(&g_keyaspect, NULL) || pthread_key_create(&g_keyaspectui, NULL)) die("创建参数位键失败");
     LOG("键号 K18=%lu KTLS=%lu KTLR=%lu KGATE=%lu KRES0=%lu KRES1=%lu KASPECT=%lu KASPECTUI=%lu",
         g_key18, g_keytls, g_keytlr, g_keygate, g_keyres[0], g_keyres[1], g_keyaspect, g_keyaspectui);
+#ifdef __ANDROID__
+    pthread_key_t keys[] = {g_key18, g_keytls, g_keytlr, g_keygate, g_keyres[0], g_keyres[1], g_keyaspect, g_keyaspectui};
+    dm_android_bind_keys(keys);
+#endif
 }
 
 // K 槽校验：pthread TSD 布局固定，槽 = tpidrro_el0 + 8*key
 // K slot check: the pthread TSD layout is fixed, slot = tpidrro_el0 + 8*key
 static void tsd_check(void) {
+#ifdef __ANDROID__
+    dm_android_host_setspecific(g_key18, (void *)0x1234);
+    if (dm_android_context_get()->slots[DM_K18] != 0x1234) die("Android context layout mismatch");
+    dm_android_host_setspecific(g_key18, NULL);
+#else
     pthread_setspecific(g_key18, (void *)0x1234);
     uint64_t base; __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(base));
     uint64_t off = *(uint64_t *)(g_mod[0].base + g_mod[0].key_page_off + g_mod[0].key_idx[KEY_K18] * 8);
     if (((uint64_t *)(base & ~7ull))[off / 8] != 0x1234) die("TSD 布局不符");
     pthread_setspecific(g_key18, 0);
+#endif
 }
 
 static void build_symhash(module_t *m);
@@ -124,7 +141,12 @@ static uint64_t resolve_sym(module_t *m, const char *name) {
 // Forced take-over table (hle.h HLE_FORCE, the __DATA,swforce section): a hit overrides the definition inside the module
 static const hle_force_ent *g_force; static unsigned g_nforce; static unsigned *g_force_hits;
 static void force_init(void) {
-    unsigned long sz; g_force = (const hle_force_ent *)getsectiondata(&_mh_execute_header, "__DATA", "swforce", &sz);
+    unsigned long sz;
+#ifdef __ANDROID__
+    g_force = dm_android_host_section(1, &sz);
+#else
+    g_force = (const hle_force_ent *)getsectiondata(&_mh_execute_header, "__DATA", "swforce", &sz);
+#endif
     g_nforce = g_force ? (unsigned)(sz / sizeof *g_force) : 0;
     g_force_hits = calloc(g_nforce + 1, sizeof *g_force_hits);
     for (unsigned i = 0; i < g_nforce; i++)
@@ -179,10 +201,16 @@ static void install_key_page(module_t *m) {
     if (m->key_page_off + m->key_page_size > m->size) die("%s: 键页越界", m->name);
     uint64_t *page = (uint64_t *)(m->base + m->key_page_off);
     memset(page, 0, m->key_page_size);
+#ifdef __ANDROID__
+    for (unsigned i = 0; i < 8; ++i) page[m->key_idx[i]] = dm_android_slot_offset(i);
+    extern void dm_android_context_entry(void);
+    page[8] = (uintptr_t)dm_android_context_entry;
+#else
     for (unsigned i = 0; i < 4; i++) page[m->key_idx[i]] = (uint64_t)key_value(i) * 8;
     page[m->key_idx[KEY_KRES0]] = (uint64_t)g_keyres[0] * 8; page[m->key_idx[KEY_KRES1]] = (uint64_t)g_keyres[1] * 8;
     page[m->key_idx[KEY_KASPECT]] = (uint64_t)g_keyaspect * 8; page[m->key_idx[KEY_KASPECTUI]] = (uint64_t)g_keyaspectui * 8;
     for (int k = 0; k < 8; k++) if (!page[m->key_idx[k]]) die("%s: 键页第 %d 项为 0（宿主键没建）——游戏会读到 TSD 0 号槽", m->name, k);
+#endif
     if (mprotect(m->base + m->key_page_off, m->key_page_size, PROT_READ)) die("%s 键页 mprotect", m->name);
 }
 
@@ -272,7 +300,28 @@ void loader_hash_log(void) {
     }
 }
 
-#if TARGET_OS_IPHONE
+#if defined(__ANDROID__)
+// 客体代码来自 APK 内 ELF 库；仅数据和键页可写。
+// Guest code comes from APK ELF libraries; only data and key pages are writable.
+static void map_image(module_t *m, const char *dir) {
+    char library[1024], layout[1024], error[512];
+    // 客体模块目录：导入的数据包优先（DM_GUEST_LIBDIR），否则用 APK 库目录。
+    // 不能改成重指 DM_ANDROID_LIBDIR —— 图形驱动拿它找自己的 hook 库，那里必须留在 APK 库目录。
+    // Guest module directory: an imported package wins (DM_GUEST_LIBDIR), else the APK library directory.
+    // DM_ANDROID_LIBDIR cannot be repointed instead, because the graphics driver uses it to find its own hook
+    // libraries, which have to stay in the APK's library directory.
+    const char *library_dir = getenv("DM_GUEST_LIBDIR");
+    if (!library_dir || !*library_dir) library_dir = getenv("DM_ANDROID_LIBDIR");
+    if (!library_dir || !*library_dir) library_dir = dir;
+    snprintf(library, sizeof library, "%s/libdmguest_%s.so", library_dir, m->name);
+    snprintf(layout, sizeof layout, "%s/%s.fixups.tsv", dir, m->name);
+    dm_android_module image;
+    if (dm_android_load(&image, library, layout, error, sizeof error)) die("%s", error);
+    m->base = image.image; m->size = image.size;
+    // 保留 dlopen 引用到进程结束，避免客体代码被卸载。
+    // Retain the dlopen reference until process exit so guest code cannot be unloaded.
+}
+#elif TARGET_OS_IPHONE
 // iOS 不许运行时装入的代码执行，且苹果只许可执行文件有一个带执行权限的段（ITMS-90999）：映像由 dm/ios/tools/gen_embed.py 编进本可执行文件——
 // 代码两块（原 text、补丁区）是 __TEXT 里的节，W（ro 余部 + data + bss）是单独的 RW 段。三块在文件里不相邻；这里保留一块连续地址，
 // 按原相对位置 vm_remap 回去：代码页 copy=FALSE（与 __TEXT 共享同一批已签名页，r-x），W copy=TRUE（写时复制，用到才分页）。

@@ -21,7 +21,15 @@ static void *fdstat_main(void *arg) {
         int total = 0, romfs = 0, save = 0, logf = 0, cache = 0, dev = 0, sock = 0, pipe_ = 0, kq = 0, dir = 0, other = 0, hi = -1; char sample[400] = ""; int sk = 0;
         for (int fd = 0; fd < max; fd++) { struct stat st; if (fstat(fd, &st)) continue; total++; hi = fd;
             if (S_ISSOCK(st.st_mode)) { sock++; continue; } if (S_ISFIFO(st.st_mode)) { pipe_++; continue; } if (S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode)) { dev++; continue; }
-            char p[MAXPATHLEN] = ""; if (fcntl(fd, F_GETPATH, p) || !p[0]) { if (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode)) other++; else kq++; continue; }
+            char p[MAXPATHLEN] = "";
+#ifdef __ANDROID__
+            // Android 通过 procfs 读描述符路径。| Android reads descriptor paths through procfs.
+            int dm_android_fd_path(int, char *, size_t);
+            int path_error = dm_android_fd_path(fd, p, sizeof p);
+#else
+            int path_error = fcntl(fd, F_GETPATH, p);
+#endif
+            if (path_error || !p[0]) { if (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode)) other++; else kq++; continue; }
             if (S_ISDIR(st.st_mode)) dir++;
             if (strstr(p, "romfs") || strstr(p, "RomFS") || strstr(p, "/data/hd/") || strstr(p, ".casc") || strstr(p, "/Data/data/")) romfs++;
             else if (strstr(p, "/save") || strstr(p, ".d2s") || strstr(p, ".d2i") || strstr(p, "/user/")) save++;

@@ -527,13 +527,14 @@ HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci", "fsp-srv → open(2)", Re
 }
 HLE_FORCE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm", "fsp-srv → pread(2)", Result, h_fs_ReadFile, size_t *out, uint64_t h, int64_t off, void *buf, size_t sz) {
     size_t got = 0; uint64_t t0 = g_flag.bootprof ? now_ns() : 0;
-    dm_guest_write_prepare(buf, sz);   // 目标可能是图形层写保护的贴图池页：内核写只读页返回 EFAULT 而不缺页，先解保护并标脏 | The destination may be a texture pool page write-protected by the graphics layer: a kernel write to a read-only page returns EFAULT instead of page-faulting, so unprotect and mark dirty first
+    dm_guest_host_write_begin(buf, sz);  // prepare 与所有实际读入都在 guard 内，快照不能抢在 store 前观察脏标记 | Guard prepare and all actual reads so snapshots cannot observe a dirty mark before its stores.
     while (got < sz) {
         ssize_t r = dm_data_pread((int)h, (uint8_t *)buf + got, sz - got, off + got);
-        if (r < 0) { if (errno == EINTR) continue; return err_res("pread", "fd"); }
+        if (r < 0) { if (errno == EINTR) continue; dm_guest_host_write_end(); return err_res("pread", "fd"); }
         if (r == 0) break;
         got += r;
     }
+    dm_guest_host_write_end();  // 日志、统计和其他回调都不带 guard | Release before logging, profiling and other callbacks.
     *out = got;
     if (g_flag.bootprof) dm_prof_add(PROF_FS_READ, now_ns() - t0, got);
     if (g_fslog) { pthread_mutex_lock(&g_fslog_lock);

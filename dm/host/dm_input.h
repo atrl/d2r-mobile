@@ -20,6 +20,34 @@ uint64_t dm_input_samples(void);   // 游戏已取手柄的累计次数 | Cumula
 // ORed bitwise and a stick uses the controller's value if it is non-zero. All 0 when no controller is connected, so values are bit-for-bit the same as before
 void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
 
+// 十字键可能是按键事件，也可能是 HAT 轴（不少手柄，含 Xbox，在安卓上报成 HAT）。这里只做轴到按键位的映射，
+// 好让它能在主机上单独验证：HAT_Y 负为上、正为下；阈值 ±0.5 容忍模拟量；两轴同时超阈值给斜向两位。
+// The D-pad arrives either as key events or as HAT axes (many pads, Xbox included, report it as HAT on Android).
+// This only maps axes to button bits so it can be verified on the host on its own: HAT_Y is negative up and
+// positive down, ±0.5 tolerates analogue hats, and both axes over the threshold give two diagonal bits.
+static inline uint64_t dm_pad_hat_buttons(float hat_x, float hat_y) {
+    uint64_t buttons = 0;
+    if (hat_x <= -0.5f) buttons |= DM_BTN_LEFT; else if (hat_x >= 0.5f) buttons |= DM_BTN_RIGHT;
+    if (hat_y <= -0.5f) buttons |= DM_BTN_UP; else if (hat_y >= 0.5f) buttons |= DM_BTN_DOWN;
+    return buttons;
+}
+
+// 扳机（ZL/ZR）：Xbox 手柄在安卓上把 LT/RT 报成**模拟轴**（`AXIS_LTRIGGER`/`AXIS_RTRIGGER`，0–1）而不是
+// L2/R2 键码 —— 与十字键报成 HAT 轴是同一类问题，键码分支永远收不到它。阈值 0.5 的两个理由：轴的 flat 区
+// 在 0.06 上下抖动（实测 flat=0.062），0.5 离噪声足够远；也和上面的 HAT 用同一个阈值，手感一致。
+// 要调手感只改这一个数。
+// Triggers (ZL/ZR): on Android an Xbox pad reports LT/RT as **analogue axes** (`AXIS_LTRIGGER`/`AXIS_RTRIGGER`,
+// 0-1) rather than L2/R2 keycodes -- the same kind of gap as the D-pad arriving as HAT axes, and the keycode
+// branch can never see them. The 0.5 threshold has two reasons: the axis flutters inside a flat region of about
+// 0.06 (measured flat=0.062), so 0.5 is well clear of the noise, and it matches the HAT threshold above so the
+// feel is consistent. Tuning the feel means changing this one number.
+static inline uint64_t dm_pad_trigger_buttons(float left, float right) {
+    uint64_t buttons = 0;
+    if (left >= 0.5f) buttons |= DM_BTN_ZL;
+    if (right >= 0.5f) buttons |= DM_BTN_ZR;
+    return buttons;
+}
+
 // 可选诊断DM_HID_RECEIPT_LOG=<可写JSONL路径>：真实GetNpadState返回收样。
 // 字段read_start_ns/time_ns同宿主now_ns()；前端publish窗口必须同helper，读取区间跨发布不得强配。
 // 状态变化+最多每秒一次活动见证，1024条后limit_reached；未设环境变量不写文件。

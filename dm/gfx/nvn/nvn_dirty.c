@@ -12,6 +12,7 @@
 #include <pthread.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <errno.h>
 #include <mach/mach_time.h>
 #include <sched.h>
 
@@ -34,7 +35,7 @@ enum { BUSY_WAIT_MS = 2000 };
 // 跟踪区间 = 各内存池（MemoryPoolInitialize 登记）。池销毁后复用 live=0 的槽，信号处理里无锁扫描。
 // Tracked ranges = the memory pools (registered by MemoryPoolInitialize). After a pool is destroyed its live=0 slot is reused; the signal handler scans without locks.
 #define MAX_RANGE 4096   // 原为 256：内存池多于它时超出的池不跟踪，里面的贴图每次取用都当成脏的重传（暗黑实测峰值见内存读数行的「内存池」；塞尔达约 300 个，踩过）。扫描只到已用的槽数，容量大不增加开销 | was 256: with more memory pools than that the excess pools are untracked and their textures are treated as dirty and re-uploaded on every use (for Diablo's measured peak see "memory pools" in the memory readout line; Zelda has about 300 and hit this). The scan only covers slots in use, so a larger capacity costs nothing
-typedef struct { uintptr_t base, end; _Atomic uint8_t *state; _Atomic uint64_t *gen; size_t cap; _Atomic int live; } range_t;
+typedef struct { uintptr_t base, end; _Atomic uint8_t *state; _Atomic uint64_t *gen; size_t cap; _Atomic int live; uint64_t incarnation; int snapshot_disabled; } range_t;
 static range_t g_r[MAX_RANGE];
 static _Atomic int g_nr;
 static uintptr_t g_pg, g_shift;
@@ -45,6 +46,7 @@ static _Atomic int g_live, g_live_peak;   // 在册的池数与峰值（内存�
 void nvn_dirty_stat(int *live, int *peak, int *cap) { *live = atomic_load(&g_live); *peak = atomic_load(&g_live_peak); *cap = MAX_RANGE; }
 static _Atomic int g_overflow_logged;
 static pthread_mutex_t g_slot_mu = PTHREAD_MUTEX_INITIALIZER;   // 建池 / 销池（客体线程，可能并发）互斥选槽；缺页处理路径不碰它 | Pool creation / destruction (guest threads, possibly concurrent) pick slots under a mutex; the page-fault handling path does not touch it
+static uint64_t g_range_incarnation;
 static _Atomic uint64_t g_mp_calls, g_mp_pages, g_mp_ticks;   // 本模块的 mprotect：调用次数、覆盖页数、耗时（mach 时基，缺页路径里也安全） | This module's mprotect: call count, pages covered, time spent (mach timebase, safe in the page-fault path too)
 static void mp(uintptr_t a, size_t len, int prot) {
     uint64_t t = mach_absolute_time(); mprotect((void *)a, len, prot);
@@ -134,6 +136,8 @@ void nvn_dirty_add_range(const void *mem, size_t size) {
         memset((void *)state, 0, np); memset((void *)gen, 0, np * sizeof *gen);
     }
     r->base = base; r->end = end; r->state = state; r->gen = gen;
+    if (!++g_range_incarnation) die("dirty range incarnation overflow");
+    r->incarnation = g_range_incarnation; r->snapshot_disabled = 0;
     if (slot == n) atomic_store(&g_nr, n + 1);
     atomic_store_explicit(&r->live, 1, memory_order_release);
     pthread_mutex_unlock(&g_slot_mu);
@@ -175,6 +179,225 @@ int nvn_dirty_since(const void *addr, size_t len, uint64_t stamp) {
     uintptr_t a = (uintptr_t)addr, p = (a - r->base) >> g_shift, q = (a + len - 1 - r->base) >> g_shift;
     for (uintptr_t i = p; i <= q; i++) if (atomic_load(&r->gen[i]) > stamp) return 1;   // 上传前最后一次写的代号 ≤ 戳；之后的写必 > 戳 | The generation of the last write before upload is <= the stamp; any later write must be > the stamp
     return 0;
+}
+// 新 GPU-only 谱系单独持普通元数据事务；信号路径不读取 token，也不取得它的锁。
+// A separate normal-thread metadata transaction serves the new GPU-only lineage; signal paths neither inspect its token nor acquire its lock.
+static _Thread_local struct { nvn_dirty_snapshot_plan *plan; range_t *range; uintptr_t first, last; } g_snapshot_tx;
+static int snapshot_mp_checked(uintptr_t address, size_t size, int prot) {
+    uint64_t started = mach_absolute_time();
+    int result = mprotect((void *)address, size, prot), error = errno;
+    atomic_fetch_add(&g_mp_ticks, mach_absolute_time() - started);
+    atomic_fetch_add(&g_mp_calls, 1); atomic_fetch_add(&g_mp_pages, size >> g_shift);
+    errno = error; return result;
+}
+static int snapshot_protect_run(range_t *r, uintptr_t first, uintptr_t end, nvn_dirty_snapshot_plan *plan) {
+    if (first == end) return 1;
+    uintptr_t address = r->base + (first << g_shift); size_t bytes = (end - first) << g_shift;
+    if (snapshot_mp_checked(address, bytes, PROT_READ)) {
+        plan->protection_errno = errno; plan->reason = NVN_DIRTY_SNAPSHOT_PROTECTION; r->snapshot_disabled = 1;
+        // mprotect 可能部分生效；先真实恢复 RW，再结束 BUSY。恢复失败不能伪造任何可读写状态。
+        // mprotect may have partially applied: actually restore RW before releasing BUSY. Failed rollback cannot certify any readable/writable state.
+        if (snapshot_mp_checked(address, bytes, PROT_READ | PROT_WRITE)) die("dirty snapshot protection rollback failed: address=%p size=%zu errno=%d", (void *)address, bytes, errno);
+        // 回滚也解除过原 PROT 页；发布新代数使原 CPU 缓存拒绝旧戳，不能只禁新 GPU 谱系。
+        // Rollback also unprotects formerly PROT pages: publish a fresh generation so old CPU caches reject their stamps, not just the new GPU lineage.
+        uint64_t generation = atomic_fetch_add(&g_now, 1) + 1;
+        for (uintptr_t p = first; p < end; p++) { atomic_store(&r->gen[p], generation); atomic_store(&r->state[p], PG_NONE); }
+        return 0;
+    }
+    for (uintptr_t p = first; p < end; p++) atomic_store(&r->state[p], PG_PROT);
+    return 1;
+}
+static int snapshot_validate_locked(nvn_dirty_snapshot_plan *plan) {
+    range_t *r = g_snapshot_tx.range;
+    if (r->snapshot_disabled || r->incarnation != plan->incarnation || !atomic_load_explicit(&r->live, memory_order_acquire)) {
+        plan->reason = NVN_DIRTY_SNAPSHOT_DISABLED; return 0;
+    }
+    if (atomic_load(&g_now) != plan->stamp) { plan->reason = NVN_DIRTY_SNAPSHOT_EPOCH; return 0; }
+    for (uintptr_t p = g_snapshot_tx.first; p <= g_snapshot_tx.last; p++) {
+        uint64_t gen = atomic_load(&r->gen[p]); uint8_t state = atomic_load(&r->state[p]);
+        if (gen > plan->stamp) { plan->reason = NVN_DIRTY_SNAPSHOT_EPOCH; return 0; }
+        if (state != PG_PROT) { plan->reason = state == PG_BUSY ? NVN_DIRTY_SNAPSHOT_BUSY : NVN_DIRTY_SNAPSHOT_STATE; return 0; }
+    }
+    if (atomic_load(&g_now) != plan->stamp) { plan->reason = NVN_DIRTY_SNAPSHOT_EPOCH; return 0; }
+    return 1;
+}
+int nvn_dirty_snapshot_begin(const void *addr, size_t len, uint64_t old_stamp, uint64_t old_incarnation, nvn_dirty_snapshot_plan *plan) {
+    int saved_errno = errno, accepted = 0; uintptr_t a = (uintptr_t)addr;
+    if (!plan) { errno = saved_errno; return 0; }
+    if (g_snapshot_tx.plan) {
+        if (plan != g_snapshot_tx.plan) { memset(plan, 0, sizeof *plan); plan->reason = NVN_DIRTY_SNAPSHOT_REENTRANT; }
+        errno = saved_errno; return 0;
+    }
+    memset(plan, 0, sizeof *plan); plan->size = len;
+    if (!len || len > UINTPTR_MAX - a) { plan->reason = NVN_DIRTY_SNAPSHOT_INVALID; goto done; }
+    pthread_mutex_lock(&g_slot_mu);
+    range_t *r = find(a);
+    if (!r || a + len > r->end) { plan->reason = NVN_DIRTY_SNAPSHOT_UNTRACKED; goto unlock; }
+    plan->incarnation = r->incarnation;
+    if (r->snapshot_disabled) { plan->reason = NVN_DIRTY_SNAPSHOT_DISABLED; goto unlock; }
+    plan->stamp = atomic_load(&g_now); // 先取戳再扫描 / 保护 / 读，不能吃掉这一窗口中的写标记。 | Stamp before scan/protect/read, never absorb write marks from that window.
+    plan->full = !old_incarnation || old_incarnation != r->incarnation;
+    if (!plan->full && old_stamp > plan->stamp) { plan->reason = NVN_DIRTY_SNAPSHOT_INVALID; goto unlock; }
+    uintptr_t first = (a - r->base) >> g_shift, last = (a + len - 1 - r->base) >> g_shift;
+    for (uintptr_t p = first; p <= last; p++) {
+        uint64_t gen = atomic_load(&r->gen[p]); uint8_t state = atomic_load(&r->state[p]);
+        if (state == PG_BUSY) { plan->reason = NVN_DIRTY_SNAPSHOT_BUSY; goto unlock; }
+        if (state != PG_NONE && state != PG_PROT) { plan->reason = NVN_DIRTY_SNAPSHOT_STATE; goto unlock; }
+        if (!plan->full && gen <= old_stamp && state == PG_PROT) continue;
+        uintptr_t page_start = r->base + (p << g_shift), start = page_start < a ? a : page_start;
+        uintptr_t end = a + len - page_start < g_pg ? a + len : page_start + g_pg;
+        size_t offset = start - a, bytes = end - start;
+        if (plan->run_count && plan->runs[plan->run_count - 1].offset + plan->runs[plan->run_count - 1].size == offset) plan->runs[plan->run_count - 1].size += bytes;
+        else {
+            if (plan->run_count == NVN_DIRTY_SNAPSHOT_MAX_RUNS) { plan->reason = NVN_DIRTY_SNAPSHOT_RUN_LIMIT; goto unlock; }
+            plan->runs[plan->run_count++] = (nvn_dirty_snapshot_run){offset, bytes};
+        }
+    }
+    if (atomic_load(&g_now) != plan->stamp) { plan->reason = NVN_DIRTY_SNAPSHOT_EPOCH; goto unlock; }
+    for (unsigned i = 0; i < plan->run_count; i++) {
+        uintptr_t begin = (a + plan->runs[i].offset - r->base) >> g_shift;
+        uintptr_t end = (a + plan->runs[i].offset + plan->runs[i].size - 1 - r->base) >> g_shift;
+        uintptr_t owned_end = begin;
+        for (uintptr_t p = begin; p <= end; p++) {
+            uint8_t expected = atomic_load(&r->state[p]);
+            if ((expected != PG_NONE && expected != PG_PROT) || !atomic_compare_exchange_strong(&r->state[p], &expected, PG_BUSY)) {
+                if (!snapshot_protect_run(r, begin, owned_end, plan)) goto unlock;
+                plan->reason = expected == PG_BUSY ? NVN_DIRTY_SNAPSHOT_BUSY : NVN_DIRTY_SNAPSHOT_STATE; goto unlock;
+            }
+            owned_end = p + 1;
+        }
+        if (!snapshot_protect_run(r, begin, owned_end, plan)) goto unlock;
+    }
+    g_snapshot_tx.plan = plan; g_snapshot_tx.range = r; g_snapshot_tx.first = first; g_snapshot_tx.last = last;
+    if (!snapshot_validate_locked(plan)) { memset(&g_snapshot_tx, 0, sizeof g_snapshot_tx); goto unlock; }
+    accepted = 1; goto done;
+unlock:
+    pthread_mutex_unlock(&g_slot_mu);
+    if (plan->reason == NVN_DIRTY_SNAPSHOT_PROTECTION) LOG("dirty snapshot caching disabled after protection failure: address=%p size=%zu incarnation=%llu errno=%d", addr, len, (unsigned long long)plan->incarnation, plan->protection_errno);
+done:
+    errno = saved_errno; return accepted;
+}
+int nvn_dirty_snapshot_end(nvn_dirty_snapshot_plan *plan) {
+    int saved_errno = errno, accepted = 0;
+    if (plan && g_snapshot_tx.plan == plan) {
+        accepted = snapshot_validate_locked(plan); memset(&g_snapshot_tx, 0, sizeof g_snapshot_tx); pthread_mutex_unlock(&g_slot_mu);
+    }
+    errno = saved_errno; return accepted;
+}
+void nvn_dirty_snapshot_abort(nvn_dirty_snapshot_plan *plan) {
+    int saved_errno = errno;
+    if (plan && g_snapshot_tx.plan == plan) { memset(&g_snapshot_tx, 0, sizeof g_snapshot_tx); pthread_mutex_unlock(&g_slot_mu); }
+    errno = saved_errno;
+}
+static _Atomic uint64_t g_publish_calls, g_publish_bytes, g_publish_pages, g_publish_rw_calls, g_publish_rw_ns, g_publish_fallbacks, g_publish_clock_unavailable;
+static void publish_unprotect_run(range_t *r, uintptr_t first, uintptr_t end) {
+    if (first == end) return;
+    uintptr_t address = r->base + (first << g_shift); size_t bytes = (end - first) << g_shift;
+    uint64_t started = mach_absolute_time();
+    int result = mprotect((void *)address, bytes, PROT_READ | PROT_WRITE), error = errno;
+    uint64_t finished = mach_absolute_time();
+    atomic_fetch_add(&g_mp_calls, 1); atomic_fetch_add(&g_mp_pages, end - first);
+    atomic_fetch_add(&g_publish_rw_calls, 1);
+    if (started && finished >= started) {
+        uint64_t ticks = finished - started;
+        atomic_fetch_add(&g_mp_ticks, ticks); atomic_fetch_add(&g_publish_rw_ns, ticks * g_tb.numer / g_tb.denom);
+    } else atomic_fetch_add(&g_publish_clock_unavailable, 1);
+    if (result) die("dirty post0 publish RW failed: address=%p size=%zu errno=%d", (void *)address, bytes, error);
+    // 解保护时先发布代数再 NONE；实际写完成后还会为整个查询发布一次完成代数。
+    // Publish an unprotect generation before NONE; completion publishes another generation for the entire query after actual stores.
+    uint64_t generation = atomic_fetch_add(&g_now, 1) + 1;
+    for (uintptr_t p = first; p < end; p++) { atomic_store(&r->gen[p], generation); atomic_store(&r->state[p], PG_NONE); }
+    atomic_fetch_add(&g_preps, end - first); atomic_fetch_add(&g_publish_pages, end - first);
+}
+int nvn_dirty_publish_copy(void *destination, const void *owned_readable_source, size_t size) {
+    int saved_errno = errno, copied = 0;
+    uintptr_t a = (uintptr_t)destination, source = (uintptr_t)owned_readable_source;
+    if (!a || !source || !size || size > UINTPTR_MAX - a || size > UINTPTR_MAX - source ||
+        (a < source + size && source < a + size)) goto fallback;
+    // queue 已排除图形读者；此锁另行固定池 metadata，覆盖 hooks、复制及完成版本，不能只 pin 到 prepare。
+    // Queue already excludes graphics readers; pin pool metadata separately through hooks, copy and completion versions, not just prepare.
+    if (g_snapshot_tx.plan) die("dirty post0 publish nested in snapshot transaction");
+    pthread_mutex_lock(&g_slot_mu);
+    range_t *r = find(a);
+    if (!r || size > r->end - a) goto unlock;
+    uintptr_t first = (a - r->base) >> g_shift, last = (a + size - 1 - r->base) >> g_shift, run = first;
+    for (uintptr_t p = first; p <= last; p++) {
+        uint8_t state = PG_PROT;
+        if (atomic_compare_exchange_strong(&r->state[p], &state, PG_BUSY)) continue;
+        publish_unprotect_run(r, run, p); run = p + 1;
+        // 先完成自己已占有的连续段，再释放回退；绝不持自有 BUSY 等待别人的 BUSY。
+        // Finish every owned run before releasing to fallback; never wait for another BUSY while retaining our own BUSY pages.
+        if (state == PG_BUSY) goto unlock;
+        if (state != PG_NONE) die("dirty post0 publish invalid page state: %u", (unsigned)state);
+    }
+    publish_unprotect_run(r, run, last + 1);
+    // 原所有 hooks 仍恰好执行一次；本模块此时已经 NONE，不再逐页 mprotect。当前 hooks 不重入 queue/metadata。
+    // Run all original hooks exactly once: our pages are now NONE, avoiding per-page mprotect. Current hooks do not reenter queue/metadata.
+    dm_guest_write_prepare(destination, size);
+    memcpy(destination, owned_readable_source, size);
+    uint64_t generation = atomic_fetch_add(&g_now, 1) + 1;
+    for (uintptr_t p = first; p <= last; p++) atomic_store(&r->gen[p], generation);
+    atomic_fetch_add(&g_publish_calls, 1); atomic_fetch_add(&g_publish_bytes, size); copied = 1;
+unlock:
+    pthread_mutex_unlock(&g_slot_mu);
+fallback:
+    if (!copied) atomic_fetch_add(&g_publish_fallbacks, 1);
+    errno = saved_errno; return copied;
+}
+void nvn_dirty_publish_copy_get_stats(nvn_dirty_publish_copy_stats *out) {
+    if (!out) return;
+    int saved_errno = errno;
+    *out = (nvn_dirty_publish_copy_stats){
+        .calls = atomic_load(&g_publish_calls), .bytes = atomic_load(&g_publish_bytes),
+        .protected_pages = atomic_load(&g_publish_pages), .rw_calls = atomic_load(&g_publish_rw_calls),
+        .rw_ns = atomic_load(&g_publish_rw_ns), .fallback_calls = atomic_load(&g_publish_fallbacks),
+        .rw_clock_unavailable = atomic_load(&g_publish_clock_unavailable)
+    };
+    errno = saved_errno;
+}
+void nvn_dirty_diagnose_write_marks(const void *addr, size_t len, uint64_t old_stamp, nvn_dirty_write_marked_stats *out) {
+    if (!out) return;
+    int saved_errno = errno;
+    nvn_dirty_write_marked_stats stats = {0};
+    uintptr_t a = (uintptr_t)addr;
+    if (!len || len > UINTPTR_MAX - a) goto done;
+    int host_page_size = getpagesize();
+    if (host_page_size <= 0) goto done;
+    uintptr_t end = a + len, page_size = (uintptr_t)host_page_size;
+    stats.page_size = page_size;
+    stats.total_pages = (end - 1) / page_size - a / page_size + 1;
+    stats.status = NVN_DIRTY_DIAG_UNTRACKED;
+    pthread_mutex_lock(&g_slot_mu);
+    stats.epoch_start = atomic_load(&g_now);
+    range_t *r = find(a);
+    if (r && end <= r->end) {
+        stats.status = NVN_DIRTY_DIAG_TRACKED;
+        uintptr_t first = (a - r->base) / page_size, last = (end - 1 - r->base) / page_size;
+        int in_run = 0;
+        // 锁只固定 range / 数组生命周期；写线程仍可并发更新原子状态，本结果不是一致内容快照。
+        // The lock pins only range/array lifetime; writers may still change atomics, so this is not a coherent content snapshot.
+        for (uintptr_t p = first; p <= last; p++) {
+            uint64_t gen = atomic_load(&r->gen[p]);
+            uint8_t state = atomic_load(&r->state[p]);
+            if (state == PG_NONE) stats.none_pages++;
+            else if (state == PG_PROT) stats.prot_pages++;
+            else if (state == PG_BUSY) stats.busy_pages++;
+            if (gen > old_stamp) {
+                uintptr_t page_start = r->base + p * page_size;
+                uintptr_t clipped_start = page_start < a ? a : page_start;
+                uintptr_t clipped_end = end - page_start < page_size ? end : page_start + page_size;
+                stats.write_marked_pages++;
+                stats.write_marked_bytes += clipped_end - clipped_start;
+                if (!in_run) stats.write_marked_runs++;
+                in_run = 1;
+            } else in_run = 0;
+        }
+    }
+    stats.epoch_end = atomic_load(&g_now);
+    pthread_mutex_unlock(&g_slot_mu);
+done:
+    *out = stats;
+    errno = saved_errno;
 }
 void nvn_dirty_slot_stats(int *live, int *used_slots, uint64_t *adds_total) {
     int n = atomic_load(&g_nr), active = 0;
