@@ -1,7 +1,7 @@
 # Apple Guest input experiment / Apple Guest 输入实验
 
-Status: Android candidate package assembled and CRC-validated; signed candidate APK verified. Android loading, rendering, touch and gameplay **not verified**.
-状态：Android 候选数据包已生成并通过结构及 CRC 校验，配套 APK 已通过发布签名检查；**尚未验证真机装载、画面、触控和游戏运行**。
+Status (2026-10-18): complete data imported on Android 15 x86_64 with ARM64 translation; Chinese title, hero creation, camp scene and touch-stick movement verified. Physical vivo fold, combat, long-session stability and thermal behavior remain unverified.
+状态（2026-10-18）：Android 15 x86_64 模拟器经 ARM64 翻译，已完成完整数据导入，显示中文标题、创建角色并进入营地，触屏摇杆可移动角色。vivo 折叠屏实机、战斗、长时间稳定性和温控尚未验证。
 
 The following sections record successive research stages; the final candidate section supersedes earlier pending-download/conversion statements.
 下文按研究阶段保留过程记录，早期“待下载/待转换”状态以末尾候选包结果为准。
@@ -149,3 +149,13 @@ The actual `PackageArchive.java` importer processed the complete 6,147,543,691-b
 启动器实际使用的 Java 导入代码已完整导入约 6.15 GB 候选包；20,828 个落盘文件逐一 SHA-256 比对通过。验证环境是桌面 OpenJDK，并非 Android 真机。不能据此宣称游戏能运行。
 
 [Android CI run 39103870220](https://github.com/atrl/d2r-mobile/actions/runs/39103870220) passed all checks and the debug APK build for commit `b119c12`. The release-signed candidate was separately verified locally; PR CI does not build a release-signed APK.
+
+## Android emulator runtime validation (2026-10-18)
+
+Android 15 Google APIs x86_64 r09, emulator 37.2.12, NVIDIA RTX 4090 host Vulkan, ARM64 `libndk_translation.so`. Installed the signed APK and imported the full 6,147,543,691-byte candidate through the app. Counts: 6 modules, 25 RomFS entries and 20,795 shader files. No original game image or keys were needed on the phone.
+
+Two startup faults were reproduced. NVN thunk function lookup returned an incorrect pointer through its LSE `stadd` counter; the Android generator now uses ARMv8 LL/SC. An in-host thunk call then returned the expected address and game startup advanced. A standalone minimal thunk did not reproduce the original fault, so this is runtime evidence, not a claim of a complete reduced reproducer. Temporary logging and self-tests were removed.
+
+Next, texture writes faulted on protected pages; the existing ucontext probe showed that the translator omitted write-fault ESR metadata. On Android hosts whose primary ABI starts with x86, dirty range registration now uses the existing untracked/always-upload fallback. Native ARM64 phones retain dirty-page tracking. This trades performance for correctness on the emulator.
+
+With both changes: Chinese title rendered, touch entered hero selection, Android text input created `TestHero`, the game loaded the camp, and dragging the virtual stick moved the character and camera. Screenshots and full runtime log were captured locally. This establishes basic Android rendering and input, not combat or all-device compatibility. Debug instrumentation is absent from the release candidate.

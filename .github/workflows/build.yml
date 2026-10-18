@@ -86,16 +86,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > "$RUNNER_TEMP/notes.md" <<'EOF'
-          Android preview for vivo X Fold5. APK includes no game data; import your own prepared package.
-          Foldable window handling and a no-data touch/surface check are included.
-          No X Fold5 gameplay or thermal validation has been performed. See docs/ANDROID_FOLD.md for installation and acceptance status.
-          **首次安装必读：这个约 20 MB 的 APK 不是完整游戏。**
-          没有游戏数据时不能开始游戏。需要自己的 Switch 版 D2R 本体、对应更新与 prod.keys，在电脑用本发布的打包套件生成 d2r-package.zip，再传到手机导入。PC 版目录不能直接导入。
-          缺少数据时点击启动会显示准备说明。APK 可覆盖本 fork 的旧预览版安装。
-          启动器新增“检查 GitHub 更新”，支持本 fork 的预览版；浏览器下载后覆盖安装。
-          新增本地整合工具：签名 APK + 现成 Android 数据包 → 单个安装 ZIP。未包含或发布游戏数据。
-          整合与更新：https://github.com/atrl/d2r-mobile/blob/main/docs/ANDROID_DISTRIBUTION.zh-CN.md
-          数据准备：https://github.com/atrl/d2r-mobile/blob/main/dm/android/kit/README.zh-CN.md
-          尚未完成 X Fold5 实玩与温控验证。
+          **首次安装：下载 D2R-Android-port.apk，安装后选择“下载游戏数据”。**
+          应用直接从 GitHub 下载约 6.15 GB 数据，逐卷校验 SHA-256 并自动导入；无需电脑或手动合并。首次安装请预留 13 GB 空间，建议使用 Wi-Fi 并保持应用在前台。下载中断后再次点击可续传。
+          APK 与数据独立更新，覆盖安装 APK 保留已导入的数据。启动器内“检查 GitHub 更新”支持本仓库的预览版。
+          数据引用 preview.5 的固定校验版本，因此该发布需保留；打包工具 ZIP 是开发工具，普通安装无需下载。
+          **兼容性测试版：已在 Android 模拟器创建角色、进入营地并验证摇杆移动；战斗、vivo 折叠屏实机和温控测试仍未完成。**
+          Android 15 x86 模拟器已验证 ARM64 安装与完整数据导入；修正 NVN 计数跳板的原子指令兼容问题，对缺少写异常元数据的 x86 翻译环境关闭脏页写保护。
+          Download the APK, then use Download game data in the launcher. About 6.15 GB is downloaded and imported automatically. Reserve 13 GB and keep the app in the foreground. Interrupted downloads can resume. Camp entry and touch movement work in the emulator; combat and vivo fold hardware validation remain incomplete.
           EOF
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --title "D2R Android $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" dist/*

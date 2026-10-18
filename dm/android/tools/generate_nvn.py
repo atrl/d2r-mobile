@@ -12,6 +12,10 @@ for name in ("nvn_thunks", "nvn_entry"):
     text = re.sub(r"\b_(nvn\w*|mach_absolute_time)\b", r"\1", text)
     text = re.sub(r"(\w+)@PAGEOFF", r":lo12:\1", text)
     text = text.replace("@PAGE", "")
+    # Base ARMv8 atomics also work under Android ARM translation.
+    if name == "nvn_thunks":
+        text = text.replace("    mov x17, #1\n    stadd x17, [x16]",
+                            "1:  ldxr x17, [x16]\n    add x17, x17, #1\n    stxr w15, x17, [x16]\n    cbnz w15, 1b")
     # 直接 ADRP 地址必须绑定到本共享库，不能成为可被替换的外部符号。
     # Direct ADRP addresses must bind to this shared library rather than preemptible external symbols.
     text = ".hidden nvn_slot, nvn_real, nvn_prof_ticks\n" + text

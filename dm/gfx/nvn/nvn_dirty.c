@@ -15,6 +15,9 @@
 #include <errno.h>
 #include <mach/mach_time.h>
 #include <sched.h>
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
 
 // 页状态与 mprotect 的次序（改保护的一方先把状态改成 BUSY，mprotect 落地后才改成终态；别的线程见 BUSY 就等）：
 //   设只读：NONE → BUSY → mprotect(只读) → PROT；解保护：PROT → BUSY → mprotect(可写) → NONE。
@@ -105,6 +108,13 @@ static void prep_write(void *addr, size_t len) {
 }
 
 void nvn_dirty_add_range(const void *mem, size_t size) {
+#ifdef __ANDROID__
+    // Android's ARM translation on x86 omits ESR write-fault metadata.
+    // Use the existing untracked (always upload) path instead of protecting pages.
+    char host_abi[PROP_VALUE_MAX] = {0};
+    __system_property_get("ro.product.cpu.abi", host_abi);
+    if (!strncmp(host_abi, "x86", 3)) return;
+#endif
     static int inited;
     if (!inited) { inited = 1; g_pg = (uintptr_t)getpagesize(); g_shift = __builtin_ctzl(g_pg); mach_timebase_info(&g_tb); dm_fault_hook_register(on_fault); dm_guest_write_prep_register(prep_write); }
     atomic_fetch_add(&g_adds_total, 1);

@@ -132,7 +132,8 @@ def main():
         for source, test, label in (("TouchPadState.java", "TouchPadStateTest", "Touch cancellation"),
                                     ("SaveArchive.java", "SaveArchiveTest", "存档包"),
                                     ("PackageArchive.java", "PackageArchiveTest", "数据包导入"),
-                                    ("ReleaseVersion.java", "ReleaseVersionTest", "GitHub release ordering")):
+                                    ("ReleaseVersion.java", "ReleaseVersionTest", "GitHub release ordering"),
+                                    ("GitHubData.java", "GitHubDataTest", "GitHub data download/resume/integrity")):
             if not (JAVAC.exists() and JAVA.exists()):
                 skipped.append("%s（%s）：没有项目 JDK（%s）" % (label, test, JAVAC))
                 continue

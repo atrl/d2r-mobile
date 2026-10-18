@@ -69,7 +69,7 @@ public final class LauncherActivity extends Activity {
     private int resolutionIndex;
     private int driverIndex;
     private String packageSummary = "";
-    private boolean importing;
+    private volatile boolean importing;
     private volatile boolean cancelImport;
     // 出图分辨率只提供几档预设：它是"主机档"尺寸，掌机档由 native 按 0.8 同比例缩放（与 Mac/iOS 同一语义）。
     // 空字符串表示跟随档位（不写这个键，用原版 16:9 常数）。
@@ -378,6 +378,10 @@ public final class LauncherActivity extends Activity {
         diagnostic.setOnClickListener(v -> startActivity(new Intent(this, FoldDiagnosticActivity.class)));
         column.addView(diagnostic);
 
+        TextView downloadItem = item(text("dmAndroidDataDownload"), 19, PARCHMENT, false, true);
+        downloadItem.setOnClickListener(v -> downloadData());
+        column.addView(downloadItem);
+
         importItem = item(importLabel(), 19, PARCHMENT, false, true);
         importItem.setOnClickListener(v -> pickPackage());
         column.addView(importItem);
@@ -539,6 +543,56 @@ public final class LauncherActivity extends Activity {
         }, "d2r-package-import").start();
     }
 
+    private void downloadData() {
+        if (importing) { cancelImport = true; return; }
+        new AlertDialog.Builder(this).setTitle(text("dmAndroidDataDownload"))
+            .setMessage(text("dmAndroidDataNotice"))
+            .setPositiveButton(android.R.string.ok, (dialog, which) -> beginDownload())
+            .setNegativeButton(android.R.string.cancel, null).show();
+    }
+
+    private void beginDownload() {
+        importing = true; cancelImport = false; updateStartState();
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        setStatus(String.format(text("dmAndroidDataProgress"), 0), MUTED);
+        new Thread(() -> {
+            try {
+                File directory = new File(getExternalFilesDir(null), "data-download");
+                // Reserve space for extraction as well as remaining compressed parts.
+                long cached = 0;
+                File[] existing = directory.listFiles();
+                if (existing != null) for (File f : existing) cached += f.length();
+                if (getExternalFilesDir(null).getUsableSpace() < GitHubData.TOTAL * 2 + 536870912L - Math.min(cached, GitHubData.TOTAL))
+                    throw new IOException(text("dmAndroidDataSpace"));
+                File[] parts = GitHubData.download(directory, new GitHubData.Sink() {
+                    private int last = -1;
+                    public boolean cancelled() { return cancelImport; }
+                    public void progress(long bytes) {
+                        int percent = (int)(bytes * 100 / GitHubData.TOTAL);
+                        if (percent == last) return;
+                        last = percent;
+                        runOnUiThread(() -> setStatus(String.format(text("dmAndroidDataProgress"), percent), MUTED));
+                    }
+                });
+                String summary;
+                try (InputStream stream = GitHubData.open(parts)) { summary = extractStream(stream, GitHubData.TOTAL); }
+                for (File part : parts) part.delete();
+                runOnUiThread(() -> {
+                    packageSummary = summary; writeState(); refreshFromDisk(); setStatus(summary, PARCHMENT);
+                });
+            } catch (Exception error) {
+                android.util.Log.e("D2RData", "Download/import failed", error);
+                runOnUiThread(() -> setStatus(String.format(text("dmAndroidLaunchImportFailed"), failureText(error)), WARNING));
+            } finally {
+                importing = false;
+                runOnUiThread(() -> {
+                    getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    updateStartState();
+                });
+            }
+        }, "github-data-download").start();
+    }
+
     private long documentSize(Uri uri) {
         try (android.database.Cursor cursor = getContentResolver().query(uri, new String[]{OpenableColumns.SIZE}, null, null, null)) {
             if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) return cursor.getLong(0);
@@ -553,17 +607,20 @@ public final class LauncherActivity extends Activity {
     // no Android API and is regression-tested on a PC). This supplies only where the stream comes from, how progress
     // is shown, how cancellation is noticed, and how a failure is told to the player.
     private String extract(Uri uri, long totalBytes) throws IOException {
-        PackageArchive.Counts counts;
         try (InputStream raw = getContentResolver().openInputStream(uri)) {
             if (raw == null) throw new IOException("cannot open the selected file");
-            counts = PackageArchive.unpack(raw, packageDirectory(), packageGameDirectory(), totalBytes,
-                                           new PackageArchive.Sink() {
-                @Override public void progress(final int percent) {
+            return extractStream(raw, totalBytes);
+        }
+    }
+
+    private String extractStream(InputStream raw, long totalBytes) throws IOException {
+        PackageArchive.Counts counts = PackageArchive.unpack(raw, packageDirectory(), packageGameDirectory(), totalBytes,
+            new PackageArchive.Sink() {
+                public void progress(int percent) {
                     runOnUiThread(() -> setStatus(String.format(text("dmAndroidLaunchImporting"), percent), MUTED));
                 }
-                @Override public boolean cancelled() { return cancelImport; }
+                public boolean cancelled() { return cancelImport; }
             }, LauncherActivity::declaration);
-        }
         // 显示**实际解出**的数量。清单自报的数只参与校验、不当结果显示 —— 以前正是把它当结果显示，
         // 才让一个只装了一个文件的包报出"46 个资源、20795 个着色器"。
         // Report what was **actually** unpacked. The manifest's own numbers are only compared, never displayed:
@@ -609,7 +666,8 @@ public final class LauncherActivity extends Activity {
             new AlertDialog.Builder(this)
                 .setTitle(text("dmAndroidLaunchImport"))
                 .setMessage(text("dmAndroidLaunchSetupHelp"))
-                .setPositiveButton(text("dmAndroidLaunchImport"), (dialog, which) -> pickPackage())
+                .setPositiveButton(text("dmAndroidDataDownload"), (dialog, which) -> downloadData())
+                .setNeutralButton(text("dmAndroidLaunchImport"), (dialog, which) -> pickPackage())
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
             return;
