@@ -39,8 +39,7 @@ def extract_packages(romfs, output):
     return count
 
 
-def prepare_jobs(packages, main, work, reduced=False, host_subgroup_size=32):
-    import nsoimg
+def prepare_jobs(packages, main, work, reduced=False, host_subgroup_size=32, main_image=False):
     facts = dmsh_facts.load(); records = {}
     for path in sorted(packages.glob("*.bin")):
         data = path.read_bytes(); starts = [m.start() for m in re.finditer(b"BTCDBTCD", data)]
@@ -52,11 +51,17 @@ def prepare_jobs(packages, main, work, reduced=False, host_subgroup_size=32):
             control = record[ci:ci + control_size]
             key = hashlib.sha256(control).hexdigest()[:16]
             records.setdefault(key, (path.name, path.name[:2], record[0x38:ci], control))
-    image = nsoimg.load(main)
+    if main_image:
+        image = main.read_bytes()
+    else:
+        import nsoimg
+        image = nsoimg.load(main)
     for line in (ROOT / "gfx/nvn/shader_map.tsv").read_text().splitlines():
         cols = line.split("\t")
         if len(cols) <= 4 or not cols[0].startswith("main.rodata@"): continue
         offset = int(cols[0].split("@")[1], 16)
+        if main_image and hashlib.sha256(image[offset:offset + 0x880]).hexdigest()[:16] != cols[3]:
+            raise ValueError("Recovered main image does not match embedded shader map")
         start = image.rfind(bytes.fromhex("78563412"), offset - 0x1000, offset)
         if start < 0: raise ValueError("Embedded shader code is absent")
         records.setdefault(cols[3], (cols[0], {"顶点": "vs", "像素": "ps"}[cols[2]], image[start:offset], image[offset:offset + 0x880]))
@@ -257,6 +262,7 @@ def main():
     parser.add_argument("--prepare-only", action="store_true"); parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--precision", choices=("full", "reduced"), default="full", help="GPU contraction policy; use separate output directories for each variant (default: full)")
     parser.add_argument("--host-subgroup-size", type=int, choices=(32, 64, 128), default=32, help="Actual Vulkan subgroup size; preserve guest 32-lane warp semantics using Ryujinx adapters (default: 32)")
+    parser.add_argument("--main-image", action="store_true", help="main is a recovered flat image; validate embedded shader control hashes")
     parser.add_argument("--reuse-jobs", type=Path, help="Existing work/jobs.json; skip CASC/NSO extraction (romfs and main may be omitted)")
     parser.add_argument("--translator", type=Path, help="Reuse an existing Android dmsh_android.dll instead of building the translator")
     parser.add_argument("--postprocess-only", action="store_true", help="Repair required storage-image capability declarations in output/spirv without extraction/translation/reflection changes")
@@ -283,7 +289,7 @@ def main():
         jobs = reuse_jobs(args.reuse_jobs, reduced, args.host_subgroup_size);work.mkdir(parents=True, exist_ok=True)
         print(f"Reused shader jobs={len(jobs)} precision={args.precision} host_subgroup={args.host_subgroup_size} guest_warp=32", flush=True)
     else:
-        n = extract_packages(args.romfs, packages); jobs = prepare_jobs(packages, args.main, work, reduced, args.host_subgroup_size)
+        n = extract_packages(args.romfs, packages); jobs = prepare_jobs(packages, args.main, work, reduced, args.host_subgroup_size, args.main_image)
         print(f"Shader packages={n} unique jobs={len(jobs)} precision={args.precision} host_subgroup={args.host_subgroup_size} guest_warp=32", flush=True)
     record_build_config(work, output, jobs, args.precision)
     if args.reuse_jobs is not None: (work / "jobs.json").write_text(json.dumps(jobs))

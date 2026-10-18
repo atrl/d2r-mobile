@@ -58,3 +58,20 @@ python3 dm/android/tools/retarget_apple_guest.py /path/to/Guest /path/to/matchin
 ```
 
 Full resource download and CASC/shader reconstruction are the next inputs to resolve. The current Android frontend also assumes a third `subsdk0` module; the two-module community input requires a validated loader/package path before use.
+
+## Resource index recovery / 资源索引重建
+
+The IPA's non-ASTC `romfs_overlay` includes a matching `.build.config` and `00-00000007.data`. Its decoded TVFS MD5 matches the config and contains 133,200 single-span file records. `recover_casc_manifest.py` reads encoding-spec **byte offsets**, resolves resource keys, and can rebuild `build_manifest.psv` by decoding each resource and computing its content MD5. Unknown formats fail explicitly. It validates resource EKey prefixes, decoded sizes and BLTE block checksums.
+
+已解析社区覆盖层的完整索引：133,200 个文件，其中 162 个着色器包位于 `00-00000003.data`（85 个）和 `00-00000005.data`（77 个）。覆盖层自身的 825 个文件已实际解码并通过资源键、长度检查。31 个覆盖文件的 CFT 内容长度不同于原 VFS 跨度长度；重建采用实际容器内容长度，再通过解码核验，不把原跨度长度当作新内容长度。
+
+The full archive is still downloading; no full resource manifest has yet been produced. Two synthetic tests cover raw/zlib/BLTE resources, encoding-table byte offsets, changed overlay sizes, truncation and invalid spans. The generated content hashes are computed from decoded resources, not claimed as independently supplied publisher hashes. Recovered numeric file IDs are local enumeration IDs; the manifest serves the existing path-based build tools, not a faithful reconstruction of original extraction metadata.
+
+`build_shaders.py --main-image` accepts the recovered flat main image, checks embedded control hashes against the source shader map, and extracts shader jobs without an NSO container. Nine unique embedded jobs have been extracted locally. This is preparation for translation, not SPIR-V compilation or rendering validation.
+
+```sh
+python3 dm/android/tools/recover_casc_manifest.py /path/to/romfs
+# Only after all referenced data files are present:
+python3 dm/android/tools/recover_casc_manifest.py /path/to/romfs --manifest /path/to/romfs/data/build_manifest.psv
+python3 dm/android/tools/build_shaders.py /path/to/romfs /path/to/main.apple-patched.bin /tmp/shaders --main-image --validate
+```
