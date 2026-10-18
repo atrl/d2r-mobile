@@ -1,7 +1,7 @@
 # Apple Guest input experiment / Apple Guest 输入实验
 
-Status: module recovery verified; Android conversion and gameplay **not verified**.
-状态：已验证模块还原；**尚未完成 Android 转换，也未验证游戏运行**。
+Status: module recovery and thread-base retargeting completed; Android loading and gameplay **not verified**.
+状态：已完成模块还原及线程基址转换；**尚未验证 Android 装载和游戏运行**。
 
 The community's 5,424,765,988-byte split resource ZIP contains 18 `.data` files, a README and checksums. Its ZIP directory was inspected using HTTP ranges; the complete resource bodies were not downloaded or decoded. This is substantial game resource data, but the directory does not contain the Android guest libraries or a ready-to-import Android package.
 
@@ -39,3 +39,22 @@ npx -y rea-agents@6.5.0 inspect-artifact /path/to/Guest --json
 ```
 
 Sources: [community releases](https://github.com/jiayx/d2r-mobile-build/releases), [upstream packer](https://github.com/jhaizhou-ops/d2r-mobile/blob/9393b00ea9aca52d9254214da93738f26582562f/dm/tools/guest_dylib.py), [REA](https://github.com/morluto/rea).
+
+## Thread-base retargeting result / 线程基址转换结果
+
+`retarget_apple_guest.py` now recognizes the complete MRS + ADRP + LDR + ADD key-slot sequence, verifies its key-page target, rejects unknown patterns, and replaces only the MRS with a branch to an appended Android context thunk. Existing code addresses, jump-table pads and gate return addresses remain unchanged. The thunk follows `patch_nso.py`'s Android context ABI and preserves its 128-byte scratch red zone. It does not reconstruct original NSOs or change resource content.
+
+已转换 main 的 25,127 处、sdk 的 12,085 处线程访问，生成两个 AArch64 ELF 共享库。转换器检查完整键槽寻址模式，而不是全局替换指令编码；保留原跳转表和门返回地址。产物仅保存在本地，`conversion.json` 明确记录 `runtime_verified: false`。
+
+Two additional tests passed using Unicorn 2.1.4: execute the thunk for every destination register x0–x30, asserting all other integer registers, SP, NZCV and the 128-byte red zone remain unchanged; exercise conversion and malformed-sequence rejection with a synthetic module. This verifies the thunk against a synthetic context-entry contract, not the Android dynamic linker, real TLS resolver or full game.
+
+新增两项测试通过：模拟执行全部 31 种目标寄存器，检查其余通用寄存器、栈指针、条件标志和栈下暂存区；检查合成模块转换与非法模式拒绝。模拟上下文入口不等于实际 Android TLS 或游戏验证。
+
+```sh
+# Research test dependency; install in your development environment.
+python3 -m pip install unicorn==2.1.4
+python3 -m unittest discover -s dm/android/tests -p test_apple_retarget.py
+python3 dm/android/tools/retarget_apple_guest.py /path/to/Guest /path/to/matching-metadata /tmp/android-modules
+```
+
+Full resource download and CASC/shader reconstruction are the next inputs to resolve. The current Android frontend also assumes a third `subsdk0` module; the two-module community input requires a validated loader/package path before use.
