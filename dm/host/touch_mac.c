@@ -53,13 +53,24 @@ int dm_touch_host_world_active(void) {
 // outside panels no button targets are enabled and the lower-left corner does not start a stick (click a target to walk over and interact, click empty ground to walk there); inside panels it works as before (widgets, tabs, item cells).
 // Front-end pages (main menu / character select / character creation, not in game) bypass the state machine and touches are UI clicks directly (same as frontendMode on the iOS front end).
 #include <stdatomic.h>
+static int live_eat, live_hold, live_update_eat;
+static _Atomic int live_overflow;
 static uint32_t g_live_tick0; static int g_live_based; static uint64_t g_live_btn; static uint32_t g_live_btn_until;
 static struct { _Atomic unsigned head, tail; struct { int op; float nx, ny; } q[64]; } g_live;
 // 世界手势从按下到抬起独占；点选答案只用于空地回退，不能让抬起再触发一次。
 // Own a world gesture from down through up; the pick result only supplies the ground fallback, never a second click on release.
 static struct { int owned, down, repeat; uint32_t last; float x, y; unsigned tap_seq; float tap_x, tap_y; } g_lm;
+// Consumed only on the game thread. Cancellation never becomes a click or item drop.
+static void live_cancel(void) {
+    memset(&g_lm, 0, sizeof g_lm);
+    live_eat = live_hold = live_update_eat = 0; g_live_btn = 0;
+    dm_tc_cancel_all(&g_touch.state); dm_ui_touch(3, 0, 0); dm_cursor_clear();
+    if (g_touch.ui_drag_on) { dm_ui_drag_end(); g_touch.ui_drag_on = 0; }
+    g_touch.next = g_touch.count = 0;
+    g_touch.pulse_end_beat = g_touch.pulse_resume_beat = 0;
+}
 void dm_touch_host_live(int op, float nx, float ny) {   // 前端线程：op 0 按下 1 移动 2 抬起；坐标 = 游戏画面归一化 [0,1] | Front-end thread: op 0 down, 1 move, 2 up; coordinates = normalized to the game picture [0,1]
-    if (!g_live_on) return; unsigned t = atomic_load(&g_live.tail); if (t - atomic_load(&g_live.head) >= 64) return;
+    if (!g_live_on) return; unsigned t = atomic_load(&g_live.tail); if (t - atomic_load(&g_live.head) >= 64) { atomic_store(&live_overflow, 1); return; }
     g_live.q[t % 64].op = op; g_live.q[t % 64].nx = nx; g_live.q[t % 64].ny = ny; atomic_store(&g_live.tail, t + 1);
 }
 static void touch_uimsg(const char *cat, const char *act, const char *arg) {
@@ -203,8 +214,15 @@ void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *l
         int dm_uiscreen_ingame(void); int in = dm_uiscreen_ingame(); static float px, py; unsigned h;
         if (in && !g_live_based) { g_live_based = 1; g_live_tick0 = touch_cur_tick(); if (!g_touch.based) { g_touch.started = 1; g_touch.based = 1; g_touch.loaded = 1; g_touch.tick_set = 1; g_touch.start_tick = g_live_tick0; g_touch.to_game_tick = g_live_tick0; } }
         if (!in) g_live_based = 0;
+        if (atomic_exchange(&live_overflow, 0)) {
+            atomic_store(&g_live.head, atomic_load(&g_live.tail)); live_cancel();
+        }
         while ((h = atomic_load(&g_live.head)) != atomic_load(&g_live.tail)) {
             int op = g_live.q[h % 64].op; float nx = g_live.q[h % 64].nx, ny = g_live.q[h % 64].ny; if (op != 2) { px = nx; py = ny; }
+            if (op == 3) {
+                live_cancel();
+                atomic_store(&g_live.head, h + 1); continue;
+            }
             if (op == 0) memset(&g_lm, 0, sizeof g_lm);
             if (g_lm.owned) {
                 g_lm.x = px; g_lm.y = py;
@@ -215,22 +233,22 @@ void dm_touch_host_step(uint64_t now, uint64_t *buttons, int32_t *lx, int32_t *l
             // HUD 上没有对应键的东西（血球、魔球、经验条）：吃掉。都吞到抬起为止
             // Pressed on an entry of the key-hint bar: this is not treated as a click but as pressing that key for 4 ticks (dm_padmode.c); pressed on a skill slot / belt cell / button of the in-game bottom HUD: the corresponding key is held while the mouse is down and released on mouse up (at least 3 ticks);
             // things on the HUD with no corresponding key (life orb, mana orb, experience bar): swallowed. All are swallowed until release
-            { uint64_t dm_padmode_legend_click(float, float); int dm_padmode_hud_click(float, float, uint64_t *), dm_game_paused(void); static int eat, hold; uint64_t lb = op == 0 ? dm_padmode_legend_click(px, py) : 0, hb = 0; int hk = op == 0 && !lb && in && !g_touch.state.navigation_mode ? dm_padmode_hud_click(px, py, &hb) : 0;   /* 有面板开着：不认 HUD（面板底下那排 HUD 还画着） | a panel is open: the HUD is not recognised (the HUD row under the panel is still drawn) */
-              if (lb) { eat = 1; hold = 0; g_live_btn = lb; g_live_btn_until = touch_cur_tick() + 4; }
-              else if (hk == 1) { eat = 1; hold = 1; g_live_btn = hb; g_live_btn_until = touch_cur_tick() + 30 * 600; }
-              else if (hk == 2) { eat = 1; hold = 0; }
+            { uint64_t dm_padmode_legend_click(float, float); int dm_padmode_hud_click(float, float, uint64_t *), dm_game_paused(void); uint64_t lb = op == 0 ? dm_padmode_legend_click(px, py) : 0, hb = 0; int hk = op == 0 && !lb && in && !g_touch.state.navigation_mode ? dm_padmode_hud_click(px, py, &hb) : 0;   /* 有面板开着：不认 HUD（面板底下那排 HUD 还画着） | a panel is open: the HUD is not recognised (the HUD row under the panel is still drawn) */
+              if (lb) { live_eat = 1; live_hold = 0; g_live_btn = lb; g_live_btn_until = touch_cur_tick() + 4; }
+              else if (hk == 1) { live_eat = 1; live_hold = 1; g_live_btn = hb; g_live_btn_until = touch_cur_tick() + 30 * 600; }
+              else if (hk == 2) { live_eat = 1; live_hold = 0; }
               // 右上角小地图（同 iOS 壳）：点它顶上区域名那一条（矩形高的 1/4）= 切到全屏地图；全屏地图开着时点 HUD 以外的任何地方 = 回到小地图。只在没有面板开着时认：
               // 手势层按名单认面板，大秘境选层页这类借壳的面板不在名单里（它右上角的关闭 X 正落在地名条的范围内，点 X 变成了切地图），所以再加两条——游戏没停着、这一点不在任何面板里
               // Top-right minimap (same as the iOS shell): clicking the area-name strip at its top (1/4 of the rectangle's height) = switch to the full-screen map; with the full-screen map open, clicking anywhere outside the HUD = back to the minimap. Recognised only when no panel is open:
               // the gesture layer recognises panels by a list, and panels that borrow another shell, such as the Greater Rift level-selection page, are not on it (its close X at the top right falls exactly within the area-name strip, so clicking X turned into switching the map), hence two more conditions - the game is not stopped, and this point is not inside any panel
               else if (op == 0 && in && !g_touch.state.navigation_mode && !dm_game_paused() && dm_ui_item_at_now(px, py) != 0) { int dm_ui_minimap_rect(float r[4]), dm_ui_map_is_full(void); void dm_ui_map_full(int on); float mr[4];
-                  if (dm_ui_map_is_full()) { dm_ui_map_full(0); eat = 1; hold = 0; fprintf(stderr, "[dm] 鼠标：全屏地图开着，点一下 → 回到小地图\n"); }
+                  if (dm_ui_map_is_full()) { dm_ui_map_full(0); live_eat = 1; live_hold = 0; fprintf(stderr, "[dm] 鼠标：全屏地图开着，点一下 → 回到小地图\n"); }
                   else if (dm_ui_minimap_rect(mr)) { float band = (mr[3] - mr[1]) / 4; if (band < 0.042f) band = 0.042f; if (band > (mr[3] - mr[1]) * 0.4f) band = (mr[3] - mr[1]) * 0.4f;
-                      if (px >= mr[0] && px <= mr[2] && py >= mr[1] && py <= mr[1] + band) { dm_ui_map_full(1); eat = 1; hold = 0; fprintf(stderr, "[dm] 鼠标：点在小地图顶上那一条 → 切到全屏地图\n"); } } }
-              if (eat) { if (op == 2) { eat = 0; if (hold) { hold = 0; g_live_btn_until = touch_cur_tick() + 3; } } atomic_store(&g_live.head, h + 1); continue; } }
-            if (!in) { static int upd_eat; int dm_update_click_at(float, float);   // 主菜单右上角的「有新版本…」那行：点它 = 打开下载页（dm_update.c），这一下从按下到抬起都不再交给界面 | the "New version..." line at the top right of the main menu: clicking it = open the download page (dm_update.c); this click is no longer passed to the interface from press to release
-                if (op == 0 && dm_update_click_at(px, py)) upd_eat = 1;
-                if (upd_eat) { if (op == 2) upd_eat = 0; atomic_store(&g_live.head, h + 1); continue; } }
+                      if (px >= mr[0] && px <= mr[2] && py >= mr[1] && py <= mr[1] + band) { dm_ui_map_full(1); live_eat = 1; live_hold = 0; fprintf(stderr, "[dm] 鼠标：点在小地图顶上那一条 → 切到全屏地图\n"); } } }
+              if (live_eat) { if (op == 2) { live_eat = 0; if (live_hold) { live_hold = 0; g_live_btn_until = touch_cur_tick() + 3; } } atomic_store(&g_live.head, h + 1); continue; } }
+            if (!in) { int dm_update_click_at(float, float);   // 主菜单右上角的「有新版本…」那行：点它 = 打开下载页（dm_update.c），这一下从按下到抬起都不再交给界面 | the "New version..." line at the top right of the main menu: clicking it = open the download page (dm_update.c); this click is no longer passed to the interface from press to release
+                if (op == 0 && dm_update_click_at(px, py)) live_update_eat = 1;
+                if (live_update_eat) { if (op == 2) live_update_eat = 0; atomic_store(&g_live.head, h + 1); continue; } }
             if (!in) {   // 前端页：抬起时先问一次命中——落在页签上就走「点页签 = 按对应的手柄键」（页签不认鼠标点击；局内由手势层做同一件事），其余照旧发鼠标点击 | front-end pages: on release, hit-test once first - landing on a tab goes through "clicking a tab = pressing the corresponding gamepad key" (tabs do not take mouse clicks; in game the gesture layer does the same), everything else sends a mouse click as before
                 if (op == 2 && dm_ui_item_at_now(px, py) == 2) { dm_ui_touch(3, px, py); dm_ui_tab_go(); } else dm_ui_touch(op, px, py);
                 atomic_store(&g_live.head, h + 1); continue; }

@@ -7,6 +7,8 @@
 #include "../../host/front.h"
 #include "../../host/dm_input.h"
 #include "../../host/dm_cursor.h"
+#include "../../host/touch_mac.h"
+#include "../../host/dm_uiscreen.h"
 #include "../../host/dm_i18n.h"
 #include "../../host/dm_hud.h"
 #include "debug_stats.h"
@@ -311,7 +313,7 @@ static void *boot(void *argument) {
     LOG("[android] loading %d guest modules",movie_library?3:2);
     int dm_main(int,char**);dm_main(movie_library?5:4,args);ANativeActivity_finish(s->activity);return NULL;
 }
-void front_run(void (*guest)(void)) {void mtl_init(void);mtl_init();game_app *s=application;if(!pthread_create(&s->debug_thread,NULL,progress_watch,s))s->debug_started=1;guest();}
+void front_run(void (*guest)(void)) {dm_touch_host_live_enable();void mtl_init(void);mtl_init();game_app *s=application;if(!pthread_create(&s->debug_thread,NULL,progress_watch,s))s->debug_started=1;guest();}
 void *front_metal_layer(void) {if(!application)return NULL;pthread_mutex_lock(&application->lock);ANativeWindow *w=application->window;pthread_mutex_unlock(&application->lock);return w;}
 // 出图分辨率。与 Mac（front_mac.m）和 iOS（front_ios.m）同一语义：DM_GAME_RES=宽x高 覆盖主机档，
 // 掌机档按 720/900 = 0.8 同比缩放；没有该变量时保持原版 16:9 常数（1600x900 / 1280x720），行为不变。
@@ -402,6 +404,10 @@ __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivit
 __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_setSkipSaveOnExit(JNIEnv *env,jclass klass,jboolean skip) {
     (void)env;(void)klass;atomic_store(&skip_save_once,skip?1:0);
 }
+static jint touch_scene(JNIEnv *env,jclass klass) {
+    (void)env;(void)klass;
+    return !dm_uiscreen_ingame()?0:dm_uiscreen_panel()?2:1;
+}
 __attribute__((visibility("default"))) void Java_org_d2r_android_port_D2RActivity_onTouchPad(JNIEnv *env,jclass klass,jlong buttons,jint lx,jint ly,jint rx,jint ry) {
     (void)env;(void)klass;game_app *s=application;if(!s)return;
     // Java 窗口触控和 AInputQueue 都在 Activity 的主 Looper；统一走 HLE 的短按锁存。
@@ -462,38 +468,35 @@ static int input_ready(int fd,int events,void *data) {
             if(trigger!=s->trigger_buttons)LOG("[android-pad] trigger LT=%.2f RT=%.2f → buttons=%#llx (阈值 %.2f)",lt,rt,(unsigned long long)trigger,0.5);
             s->trigger_buttons=trigger;
             pad_publish(s);handled=1;
-        }else if(is_motion){int raw_action=AMotionEvent_getAction(event),action=raw_action&AMOTION_EVENT_ACTION_MASK;unsigned lifted=(raw_action&AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)>>AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;dm_touch touches[16];int count=0;
+        }else if(is_motion){int raw_action=AMotionEvent_getAction(event),action=raw_action&AMOTION_EVENT_ACTION_MASK;unsigned lifted=(raw_action&AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)>>AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;
             pthread_mutex_lock(&s->lock);ANativeWindow *window=s->window;int w=window?ANativeWindow_getWidth(window):1,h=window?ANativeWindow_getHeight(window):1;pthread_mutex_unlock(&s->lock);
-            dm_viewport viewport=dm_viewport_fit(w,h,16,9);
-            // Menu clicks use the same host UI path as iOS; raw HID touch alone does not activate these buttons.
-            if(action==AMOTION_EVENT_ACTION_DOWN && !dm_ingame_now()) {
+            uint64_t game_size=front_game_res(0);
+            dm_viewport viewport=dm_viewport_fit(w,h,(uint32_t)game_size,(uint32_t)(game_size>>32));
+            // Route a complete primary gesture through the shared UI/inventory/world adapter.
+            if(action==AMOTION_EVENT_ACTION_DOWN) {
                 float x,y;
                 if(dm_viewport_touch(viewport,AMotionEvent_getX(event,0),AMotionEvent_getY(event,0),&x,&y)) {
                     s->ui_finger_active=1;s->ui_finger_id=AMotionEvent_getPointerId(event,0);
-                    dm_ui_touch(0,x,y);
+                    dm_touch_host_live(0,x,y);
                 }
             }
             if(s->ui_finger_active) {
-                if(action==AMOTION_EVENT_ACTION_CANCEL) {dm_ui_touch(3,0,0);s->ui_finger_active=0;}
+                if(action==AMOTION_EVENT_ACTION_CANCEL) {dm_touch_host_live(3,0,0);s->ui_finger_active=0;}
                 else for(unsigned i=0;i<AMotionEvent_getPointerCount(event);i++) {
                     if(AMotionEvent_getPointerId(event,i)!=s->ui_finger_id)continue;
                     float x,y;
                     int up=action==AMOTION_EVENT_ACTION_UP || (action==AMOTION_EVENT_ACTION_POINTER_UP && i==lifted);
                     if(dm_viewport_touch(viewport,AMotionEvent_getX(event,i),AMotionEvent_getY(event,i),&x,&y)) {
-                        if(up)dm_ui_touch(2,x,y);
-                        else if(action==AMOTION_EVENT_ACTION_MOVE)dm_ui_touch(1,x,y);
-                    } else {dm_ui_touch(3,0,0);s->ui_finger_active=0;}
+                        if(up)dm_touch_host_live(2,x,y);
+                        else if(action==AMOTION_EVENT_ACTION_MOVE)dm_touch_host_live(1,x,y);
+                    } else {dm_touch_host_live(3,0,0);s->ui_finger_active=0;}
                     if(up)s->ui_finger_active=0;
                     break;
                 }
                 AInputQueue_finishEvent(s->input,event,1);continue;
             }
-            if(action==AMOTION_EVENT_ACTION_DOWN)s->touch_needs_down=0;
-            if(!s->touch_needs_down&&action!=AMOTION_EVENT_ACTION_UP&&action!=AMOTION_EVENT_ACTION_CANCEL)for(unsigned i=0;i<AMotionEvent_getPointerCount(event)&&count<16;i++){if(action==AMOTION_EVENT_ACTION_POINTER_UP&&i==lifted)continue;float x,y;if(dm_viewport_touch(viewport,AMotionEvent_getX(event,i),AMotionEvent_getY(event,i),&x,&y))touches[count++]=(dm_touch){AMotionEvent_getPointerId(event,i)&15,x,y};}
-            dm_touch_set(touches,count);
-            // 首画面阶段：点击可确认标题/提示；按下沿由 HLE 锁存，不丢短按。
-            // First-frame controls: taps confirm title/prompts; HLE latches press edges so short taps are retained.
-            if(action==AMOTION_EVENT_ACTION_DOWN)s->tap_a=1;else if(action==AMOTION_EVENT_ACTION_UP||action==AMOTION_EVENT_ACTION_CANCEL)s->tap_a=0;pad_publish(s);handled=1;
+            // Outside the picture and secondary pointers never become an unrelated A press.
+            handled=1;
         }else if(AInputEvent_getType(event)==AINPUT_EVENT_TYPE_KEY){int key=AKeyEvent_getKeyCode(event),down=AKeyEvent_getAction(event)==AKEY_EVENT_ACTION_DOWN;uint64_t button=pad_key(key),move=key==AKEYCODE_W?DM_BTN_UP:key==AKEYCODE_A?DM_BTN_LEFT:key==AKEYCODE_S?DM_BTN_DOWN:key==AKEYCODE_D?DM_BTN_RIGHT:0;
             if(button){uint64_t before=s->pad_buttons;if(down)s->pad_buttons|=button;else s->pad_buttons&=~button;handled=1;
                 // 按键码这条路也要看得见（LB/RB/A/B 等走这里，部分手柄的方向键也走这里）：出问题时能直接对上
@@ -560,7 +563,7 @@ static void window_created(ANativeActivity *a,ANativeWindow *w) {game_app *s=a->
 // rotation does not pass through onPause/onResume and is instantaneous, so the guest clock is **not** frozen (that
 // is for going to the background); the suspension is released per the current foreground state.
 static void window_resized(ANativeActivity *a,ANativeWindow *w) {game_app *s=a->instance;
-    dm_touch_set(NULL,0);dm_ui_touch(3,0,0);s->ui_finger_active=0;pad_clear(s);s->touch_needs_down=1;
+    dm_touch_set(NULL,0);dm_touch_host_live(3,0,0);s->ui_finger_active=0;pad_clear(s);s->touch_needs_down=1;
     pthread_mutex_lock(&s->lock);int same_window=s->window==w;pthread_mutex_unlock(&s->lock);
     // 同一个窗口才处理：新窗口有 onNativeWindowCreated 那条路；后端还没活时也没有交换链要重建，第一次出图会自己建。
     // 重建这一拍会慢（表面/交换链重建、缓存变冷），照回前台那次一样先告诉动态分辨率控制器别把它当成 GPU 吃紧。
@@ -588,7 +591,7 @@ static void window_destroyed(ANativeActivity *a,ANativeWindow *w) {game_app *s=a
     if(atomic_load(&s->started)){settle_save();guest_clock_freeze_for(1,1);void mtl_screen_detach(void);mtl_screen_detach();LOG("[android] 窗口销毁：保留进程等待回到前台");}
     pthread_mutex_lock(&s->lock);if(s->window==w){s->window=NULL;ANativeWindow_release(w);}pthread_mutex_unlock(&s->lock);}
 static void input_created(ANativeActivity *a,AInputQueue *q) {game_app *s=a->instance;s->input=q;AInputQueue_attachLooper(q,ALooper_forThread(),0,input_ready,s);}
-static void input_destroyed(ANativeActivity *a,AInputQueue *q) {game_app *s=a->instance;AInputQueue_detachLooper(q);s->input=NULL;dm_touch_set(NULL,0);dm_ui_touch(3,0,0);s->ui_finger_active=0;pad_clear(s);s->touch_needs_down=1;}
+static void input_destroyed(ANativeActivity *a,AInputQueue *q) {game_app *s=a->instance;AInputQueue_detachLooper(q);s->input=NULL;dm_touch_set(NULL,0);dm_touch_host_live(3,0,0);s->ui_finger_active=0;pad_clear(s);s->touch_needs_down=1;}
 // 注意 onPause 里**不**挂起图形（Mac 的最小化路径有这一步，安卓不能照抄）：安卓在停下来之后一定会销毁窗口，
 // 而"请游戏存盘"排在窗口销毁之前（见 window_destroyed）。图形一旦在这里挂起，游戏线程就被挡在 NVN 入口外，
 // 请求的那次自动存盘永远等不到提交 —— 真机上就是这样，日志里只剩一条"未存盘退出"的红字。真正的挂起由
@@ -606,7 +609,7 @@ static void input_destroyed(ANativeActivity *a,AInputQueue *q) {game_app *s=a->i
 // as GPU pressure and the internal 3D ratio is scaled down; ② lifting the guest clock freeze, pairing with the
 // freeze taken when going to the background.
 static void resumed(ANativeActivity *a) {game_app *s=a->instance;atomic_store(&s->activity_resumed,1);dm_android_performance_resume();if(atomic_load(&s->started)){dm_3d_scale_resumed();dm_gfx_suspend(0);guest_clock_freeze_for(1,0);dm_audio_suspend(0);dm_focus_set(1);}}
-static void paused(ANativeActivity *a) {game_app *s=a->instance;atomic_store(&s->activity_resumed,0);dm_touch_set(NULL,0);dm_ui_touch(3,0,0);s->ui_finger_active=0;pad_clear(s);s->touch_needs_down=1;if(atomic_load(&s->started)){dm_focus_set(3);dm_audio_suspend(1);}dm_android_performance_close();}
+static void paused(ANativeActivity *a) {game_app *s=a->instance;atomic_store(&s->activity_resumed,0);dm_touch_set(NULL,0);dm_touch_host_live(3,0,0);s->ui_finger_active=0;pad_clear(s);s->touch_needs_down=1;if(atomic_load(&s->started)){dm_focus_set(3);dm_audio_suspend(1);}dm_android_performance_close();}
 static void destroyed(ANativeActivity *a) {game_app *s=a->instance;atomic_store(&s->debug_stop,1);
     // 请存盘只做一次：正常退出时 window_destroyed 一定先跑过（安卓在 Activity 停止时必然先销毁窗口），而且那时
     // 图形还没挂起、游戏跑得动，提交等得到。走到这里图形已经挂起，再请一次根本等不到提交，只会白等 3 秒再打一条
@@ -624,6 +627,7 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
     // NativeActivity dlopens its library without Java class-loader native-library registration; explicitly register text and touch callbacks.
     jclass klass=(*a->env)->GetObjectClass(a->env,a->clazz);JNINativeMethod methods[]={
         {"onTextResult","(JLjava/lang/String;Z)V",(void*)Java_org_d2r_android_port_D2RActivity_onTextResult},
+        {"touchScene","()I",(void*)touch_scene},
         {"onTouchPad","(JIIII)V",(void*)Java_org_d2r_android_port_D2RActivity_onTouchPad},
         {"setOverlayEnabled","(Z)V",(void*)Java_org_d2r_android_port_D2RActivity_setOverlayEnabled},
         {"setQualityPreset","(I)V",(void*)Java_org_d2r_android_port_D2RActivity_setQualityPreset},

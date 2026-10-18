@@ -77,7 +77,7 @@ public final class LauncherActivity extends Activity {
     // The output resolution offers a few presets only: it is the docked-profile size and the handheld profile is
     // scaled by 0.8 inside native code, the same semantics as Mac and iOS. An empty string means "follow the
     // profile", which writes no key and keeps the original 16:9 constants.
-    private static final String[] RESOLUTION_PRESETS = {"", "1920x1080", "2560x1440"};
+    private static final String[] RESOLUTION_PRESETS = {"", "1920x1080", "2560x1440", "screen"};
     // 图形驱动两档：系统自带的 Adreno 驱动，和随 APK 一起发的 Turnip（选它由 native 的 gpu-driver.conf 生效）。
     // Measured difference: the Adreno driver shows blocky lighting around the player, Turnip does not — see the
     // driver notes under docs/.
@@ -182,6 +182,7 @@ public final class LauncherActivity extends Activity {
 
     private String resolutionLabel() {
         String preset = RESOLUTION_PRESETS[resolutionIndex];
+        if (preset.equals("screen")) return text("dmAndroidLaunchResolution") + "：" + text("dmAndroidScreenAspect");
         if (preset.isEmpty()) return text("dmAndroidLaunchResolution") + "：" + text("dmAndroidLaunchFollowProfile");
         String[] parts = preset.split("x");
         return text("dmAndroidLaunchResolution") + "：" + parts[0] + "×" + parts[1];
@@ -272,6 +273,7 @@ public final class LauncherActivity extends Activity {
     private void writeState() {
         StringBuilder content = new StringBuilder("# 仅供界面显示 | display only\n");
         if (!packageSummary.isEmpty()) content.append("package_summary=").append(packageSummary).append('\n');
+        content.append("screen_aspect=").append(resolutionIndex == 3 ? "1" : "0").append('\n');
         content.append("driver=").append(DRIVER_STATES[driverIndex]).append('\n');
         write(stateFile(), content.toString());
     }
@@ -308,6 +310,7 @@ public final class LauncherActivity extends Activity {
         String preset = LaunchSettings.read(configFile(), "resolution");
         resolutionIndex = 0;
         if (preset != null) for (int i = 0; i < RESOLUTION_PRESETS.length; i++) if (RESOLUTION_PRESETS[i].equals(preset)) resolutionIndex = i;
+        if ("1".equals(LaunchSettings.read(stateFile(), "screen_aspect"))) resolutionIndex = 3;
         // 驱动选择记在启动界面自己的状态文件里：launch-settings.conf 由 native 按严格白名单解析，塞不进新键。
         // APK 没带内置驱动时强制回到系统驱动，免得状态文件里的旧值让界面显示一个不存在的选项。
         // The driver choice lives in the launcher's own state file: launch-settings.conf is parsed by native
@@ -322,6 +325,7 @@ public final class LauncherActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        AutoDiagnostics.start(this);
         if (stepAsideForRunningGame()) return;
         int width = getResources().getDisplayMetrics().widthPixels;
         int height = getResources().getDisplayMetrics().heightPixels;
@@ -382,6 +386,9 @@ public final class LauncherActivity extends Activity {
         TextView crashReport = item(text("dmAndroidCrashReport"), 19, PARCHMENT, false, true);
         crashReport.setOnClickListener(v -> showDiagnostics());
         column.addView(crashReport);
+        TextView autoReport = item(text("dmAndroidAutoTitle"), 19, PARCHMENT, false, true);
+        autoReport.setOnClickListener(v -> AutoDiagnostics.configure(this));
+        column.addView(autoReport);
         TextView gpuRepair = item(text("dmAndroidGpuRepair"), 19, PARCHMENT, false, true);
         gpuRepair.setOnClickListener(v -> repairSystemGpu());
         column.addView(gpuRepair);
@@ -799,7 +806,14 @@ public final class LauncherActivity extends Activity {
         content.append("operation_mode=").append(handheld ? "handheld" : "console").append('\n');
         // 跟随档位时不写这个键：native 语义里"省略"就是不改动，保持原版 16:9 常数。
         // "Follow profile" writes no key: omitting it means "leave it alone" to native, keeping the original 16:9 constants.
-        if (!RESOLUTION_PRESETS[resolutionIndex].isEmpty()) content.append("resolution=").append(RESOLUTION_PRESETS[resolutionIndex]).append('\n');
+        if (resolutionIndex == 3) {
+            android.graphics.Rect bounds;
+            if (android.os.Build.VERSION.SDK_INT >= 30) bounds = getWindowManager().getCurrentWindowMetrics().getBounds();
+            else { android.util.DisplayMetrics metrics = new android.util.DisplayMetrics(); getWindowManager().getDefaultDisplay().getRealMetrics(metrics); bounds=new android.graphics.Rect(0,0,metrics.widthPixels,metrics.heightPixels); }
+            int[] size=ScreenResolution.match(bounds.width(),bounds.height());
+            content.append("resolution=").append(size[0]).append('x').append(size[1]).append('\n');
+        } else if (!RESOLUTION_PRESETS[resolutionIndex].isEmpty()) content.append("resolution=").append(RESOLUTION_PRESETS[resolutionIndex]).append('\n');
+        writeState();
         content.append(LaunchSettings.foreign(configFile(), OWNED_KEYS));
         write(configFile(), content.toString());
         setStatus("", PARCHMENT);

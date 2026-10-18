@@ -16,6 +16,8 @@ final class StartupDiagnostics {
         report.append("Device: ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL)
             .append("\nAndroid: ").append(Build.VERSION.RELEASE).append(" API ").append(Build.VERSION.SDK_INT)
             .append("\nABIs: ").append(Arrays.toString(Build.SUPPORTED_ABIS)).append('\n');
+        android.util.DisplayMetrics display=context.getResources().getDisplayMetrics();
+        report.append("Resource display: ").append(display.widthPixels).append('x').append(display.heightPixels).append(" density=").append(display.densityDpi).append('\n');
         try {
             report.append("APK: ").append(context.getPackageManager()
                 .getPackageInfo(context.getPackageName(), 0).versionName).append('\n');

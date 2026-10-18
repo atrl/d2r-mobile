@@ -86,7 +86,7 @@ static void live_poll(void) {
 static void live_reset(void) {
     unsetenv("DM_TOUCH_SCRIPT"); memset(&g_touch, 0, sizeof g_touch); memset(&g_lm, 0, sizeof g_lm);
     atomic_store(&g_live.head, 0); atomic_store(&g_live.tail, 0);
-    g_live_on = g_live_based = 0; g_live_btn = 0;
+    g_live_on = g_live_based = 0; g_live_btn = 0; live_eat = live_hold = live_update_eat = 0;
     test_now = 1000000000ull; test_in = 1; test_paused = 0; test_hit = 3;
     test_hud = test_ui_y = test_ui_h = test_real_h = 0;
     clicks = walks = ui_events = tabs = 0; result = -1; click_seq = 0;
@@ -136,6 +136,19 @@ static void test_live_mouse(void) {
     CHECK(clicks == 0 && (polled_buttons & DM_BTN_A), "HUD press remains a held gamepad button");
     live_event(2, 0, 0); test_now += 200000000ull; live_poll();
     CHECK(clicks == 0 && walks == 0 && !(polled_buttons & DM_BTN_A), "HUD release clears its gamepad button without walking");
+
+    live_reset(); test_hud = 1; live_event(0, .7f, .9f);
+    live_event(3, 0, 0);
+    CHECK(!(polled_buttons & DM_BTN_A), "Android cancel immediately releases held HUD skill without an up");
+    test_hud = 0; live_event(0, .7f, .4f);
+    CHECK(clicks == 1, "new touch after cancel is not swallowed by previous HUD ownership");
+    live_event(3, 0, 0); result = 0; test_now += 400000000ull; live_poll();
+    CHECK(walks == 0, "cancel discards pending world result and held movement");
+
+    live_reset(); test_hud = 1; live_event(0, .7f, .9f);
+    for (int i=0;i<64;i++) dm_touch_host_live(1, .7f, .9f);
+    dm_touch_host_live(2, 0, 0); live_poll();
+    CHECK(!(polled_buttons & DM_BTN_A), "queue overflow cancels held skill even when release could not be queued");
 
     live_reset(); test_in = 0; live_event(0, .2f, .2f); live_event(2, 0, 0);
     CHECK(clicks == 0 && walks == 0 && ui_events == 2, "front-end menu clicks retain their original UI path");

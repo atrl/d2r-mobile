@@ -54,12 +54,12 @@ def python_check(name, script, *args):
     report(name, result.returncode == 0, (result.stdout or "").strip().splitlines()[-1] if result.stdout else "")
 
 
-def compile_and_run(name, sources, binary, compile_flags=()):
+def compile_and_run(name, sources, binary, compile_flags=(), cwd=None):
     result = run([CC, *compile_flags, "-o", binary, *sources])
     if result.returncode != 0:
         report(name + "（编译）", False, (result.stdout or "").strip()[-400:])
         return
-    result = run([binary])
+    result = run([binary], cwd=cwd)
     report(name, result.returncode == 0, (result.stdout or "").strip().splitlines()[-1] if result.stdout else "")
 
 
@@ -111,12 +111,18 @@ def main():
         python_check("APK 版本折算（test_version）", "dm/android/tests/test_version.py")
         python_check("Explicit driver shader profile", "dm/android/tests/test_driver_profile.py")
         python_check("Shader subgroup selection", "dm/android/tests/test_shader_profile.py")
+        python_check("Diagnostic receiver", "dm/android/tests/test_diagnostic_receiver.py")
         python_check("Install bundle", "dm/android/tests/test_install_bundle.py")
         python_check("Apple guest recovery", "dm/android/tests/test_apple_guest.py")
         python_check("Android context retargeting", "dm/android/tests/test_apple_retarget.py")
         python_check("CASC manifest recovery", "dm/android/tests/test_casc_recovery.py")
 
         compile_and_run("方向键/扳机映射（t_padmap）", [REPO / "dm/host/tests/t_padmap.c"], workspace / "t_padmap")
+        (workspace / "build").mkdir()
+        compile_and_run("Live touch menus, world, inventory and cancellation",
+                        [REPO / "dm/host/tests/t_touch_mac.c", REPO / "dm/host/dm_cursor.c", REPO / "dm/host/dm_hud.c", REPO / "dm/host/dm_prof.c", "-lm"],
+                        workspace / "touch_host", ("-std=c11", "-D_GNU_SOURCE", "-w", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+                        "-I", ROOT / "native/compat", "-I", REPO / "dm/host", "-I", REPO / "dm/ios/Sources"), cwd=workspace)
         # 启动设置：普通版与"环境写入失败"注入版都要跑（故障恢复那条只有注入版才覆盖）。
         launch = [ROOT / "native/launch_settings.c", ROOT / "tests/launch_settings_test.c"]
         compile_and_run("启动设置（普通）", launch, workspace / "launch_settings",
@@ -132,7 +138,9 @@ def main():
         # accept anything with at least one file per category, so a hollow package could pass and leave the game
         # unable to start.
         for source, test, label in (("TouchPadState.java", "TouchPadStateTest", "Touch cancellation"),
-                                    ("ShaderPatch.java", "ShaderPatchTest", "Shader compatibility patch"),
+                                    ("DiagnosticEndpoint.java", "DiagnosticEndpointTest", "Diagnostic upload address"),
+            ("ScreenResolution.java", "ScreenResolutionTest", "Screen aspect render size"),
+            ("ShaderPatch.java", "ShaderPatchTest", "Shader compatibility patch"),
             ("SaveArchive.java", "SaveArchiveTest", "存档包"),
                                     ("PackageArchive.java", "PackageArchiveTest", "数据包导入"),
                                     ("ReleaseVersion.java", "ReleaseVersionTest", "GitHub release ordering"),
