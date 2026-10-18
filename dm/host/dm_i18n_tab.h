@@ -472,7 +472,7 @@ static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {
     { "dmAndroidUpdateBrowser", "没有可用的浏览器，请手动打开：", "No browser available. Open this address manually:" },
     { "dmAndroidDataDownload", "下载游戏数据 / 取消下载", "Download game data / Cancel" },
     { "dmAndroidDataNotice", "从 GitHub 下载约 6.15 GB 数据并自动导入。首次安装请预留 13 GB 空间，建议使用 Wi-Fi。再次点击下载按钮可取消，中断后可继续。当前是兼容性测试版本，游戏运行仍在验证。", "Download about 6.15 GB from GitHub and import automatically. Allow 13 GB free space and use Wi-Fi. Tap Download again to cancel; interrupted downloads can resume. This is a compatibility preview; gameplay is still being verified." },
-    { "dmAndroidDataProgress", "下载：%.2f%% · %.1f / %.1f MiB · 再次点击下载可取消", "Downloading: %.2f%% · %.1f / %.1f MiB · Tap Download to cancel" },
+    { "dmAndroidDataProgress", "下载：%.2f%% · %.1f / %.1f MiB · %.2f MiB/s · 再次点击下载可取消", "Downloading: %.2f%% · %.1f / %.1f MiB · %.2f MiB/s · Tap Download to cancel" },
     { "dmAndroidDataSpace", "空间不足：请至少留出 13 GB 空间后重试。", "Not enough space: allow at least 13 GB free and retry." },
     { "dmAndroidDataConnecting", "正在连接 GitHub，请稍候…", "Connecting to GitHub…" },
     { "dmAndroidDataVerifying", "正在校验已下载的分卷，请稍候…", "Verifying downloaded part…" },

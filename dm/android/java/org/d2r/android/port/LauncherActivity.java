@@ -565,14 +565,20 @@ public final class LauncherActivity extends Activity {
                 if (getExternalFilesDir(null).getUsableSpace() < GitHubData.TOTAL * 2 + 536870912L - Math.min(cached, GitHubData.TOTAL))
                     throw new IOException(text("dmAndroidDataSpace"));
                 File[] parts = GitHubData.download(directory, new GitHubData.Sink() {
-                    private long lastUpdate;
+                    private long lastUpdate, rateTime, rateBytes;
+                    private double speed;
                     public boolean cancelled() { return cancelImport; }
                     public void progress(long bytes) {
                         long now = android.os.SystemClock.elapsedRealtime();
+                        if (rateTime == 0 || bytes < rateBytes) { rateTime = now; rateBytes = bytes; speed = 0; }
+                        else if (now - rateTime >= 1000) {
+                            speed = (bytes - rateBytes) * 1000.0 / (now - rateTime) / 1048576.0;
+                            rateTime = now; rateBytes = bytes;
+                        }
                         if (lastUpdate != 0 && now - lastUpdate < 500 && bytes != GitHubData.TOTAL) return;
                         lastUpdate = now;
                         String message = String.format(text("dmAndroidDataProgress"),
-                            bytes * 100.0 / GitHubData.TOTAL, bytes / 1048576.0, GitHubData.TOTAL / 1048576.0);
+                            bytes * 100.0 / GitHubData.TOTAL, bytes / 1048576.0, GitHubData.TOTAL / 1048576.0, speed);
                         runOnUiThread(() -> setStatus(message, MUTED));
                     }
                     public void phase(String phase, int attempt) {

@@ -6,6 +6,7 @@ import java.security.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Immutable, SHA-256 pinned data release. APK updates do not redownload this data. */
 final class GitHubData {
@@ -86,7 +87,7 @@ final class GitHubData {
         fetchParts(urls, parts, sizes, HASHES, sink);
         return parts;
     }
-    // Independent files permit two connections without changing the package or its resume offsets.
+    // Independent files permit four connections without changing the package or its resume offsets.
     static void fetchParts(URL[] urls, File[] parts, long[] sizes, String[] hashes, Sink sink) throws Exception {
         if (urls.length != parts.length || sizes.length != parts.length || hashes.length != parts.length)
             throw new IllegalArgumentException("Part metadata length mismatch");
@@ -96,7 +97,8 @@ final class GitHubData {
             downloaded[i] = parts[i].isFile() && parts[i].length() <= sizes[i] ? parts[i].length() : 0;
         Object progressLock = new Object();
         AtomicBoolean stopping = new AtomicBoolean();
-        ExecutorService pool = Executors.newFixedThreadPool(2);
+        AtomicReference<Exception> failure = new AtomicReference<>();
+        ExecutorService pool = Executors.newFixedThreadPool(4);
         CompletionService<Void> finished = new ExecutorCompletionService<>(pool);
         try {
             for (int i = 0; i < parts.length; i++) {
@@ -123,12 +125,13 @@ final class GitHubData {
                             }
                         });
                         return null;
-                    } catch (Exception error) { stopping.set(true); throw error; }
+                    } catch (Exception error) { failure.compareAndSet(null, error); stopping.set(true); throw error; }
                 });
             }
             for (int i = 0; i < parts.length; i++) {
                 try { finished.take().get(); }
                 catch (ExecutionException error) {
+                    if (failure.get() != null) throw failure.get();
                     if (error.getCause() instanceof Exception) throw (Exception)error.getCause();
                     throw new IOException("Download worker failed", error.getCause());
                 }

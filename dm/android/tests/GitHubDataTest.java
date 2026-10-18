@@ -10,7 +10,7 @@ public class GitHubDataTest {
         java.util.concurrent.ExecutorService handlers = java.util.concurrent.Executors.newCachedThreadPool();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.setExecutor(handlers);
-        java.util.concurrent.CountDownLatch overlap = new java.util.concurrent.CountDownLatch(2);
+        java.util.concurrent.CountDownLatch overlap = new java.util.concurrent.CountDownLatch(4);
         java.util.concurrent.atomic.AtomicInteger active = new java.util.concurrent.atomic.AtomicInteger();
         java.util.concurrent.atomic.AtomicInteger peak = new java.util.concurrent.atomic.AtomicInteger();
         java.util.concurrent.atomic.AtomicBoolean concurrent = new java.util.concurrent.atomic.AtomicBoolean();
@@ -53,7 +53,7 @@ public class GitHubDataTest {
         };
         try {
             GitHubData.fetchParts(urls, files, sizes, hashes, sink);
-            if (!concurrent.get() || peak.get() != 2) throw new AssertionError("two-connection bound: " + peak);
+            if (!concurrent.get() || peak.get() != 4) throw new AssertionError("four-connection bound: " + peak);
             if (updates.get(0) != 52L || updates.get(updates.size()-1) != 65536L) throw new AssertionError("aggregate progress");
             for (int i=0;i<4;i++) if (!java.util.Arrays.equals(payload[i], Files.readAllBytes(files[i].toPath()))) throw new AssertionError("parallel resume integrity");
             try (InputStream in = GitHubData.open(files)) {
@@ -63,7 +63,7 @@ public class GitHubDataTest {
             for (File f:files) f.delete();
             String[] bad = hashes.clone(); bad[0] = "bad hash";
             try { GitHubData.fetchParts(urls, files, sizes, bad, sink); throw new AssertionError("accepted bad part"); }
-            catch (IOException expected) {}
+            catch (IOException expected) { if (!expected.getMessage().contains("checksum")) throw new AssertionError("lost original failure", expected); }
             int before = updates.size(); Thread.sleep(100);
             if (updates.size()!=before) throw new AssertionError("worker still reporting after failure");
             GitHubData.fetchParts(urls, files, sizes, hashes, sink);
