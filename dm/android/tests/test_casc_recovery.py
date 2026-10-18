@@ -1,5 +1,7 @@
 """Synthetic TVFS and encoded resources; no game data."""
 import hashlib
+import json
+import subprocess
 from pathlib import Path
 import struct
 import sys
@@ -40,6 +42,30 @@ class RecoveryTest(unittest.TestCase):
                 self.assertEqual(decode(root, rows[0]), content)
                 (root / 'data/00-00000001.data').write_bytes(raw[:-1])
                 with self.assertRaisesRegex(ValueError, 'truncated'): decode(root, rows[0])
+
+    def test_manifest_reports_missing_and_preserves_namespace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'data').mkdir()
+            tvfs, resource = fixture(b'example', 'n')
+            encoded = casc_overlay.blte_encode(tvfs)
+            key = casc_overlay.ekey_for(encoded, 0, 7, 0)
+            (root / 'data/00-00000007.data').write_bytes(encoded)
+            (root / 'data/.build.config').write_text(
+                f'vfs-1 = {hashlib.md5(tvfs).hexdigest()} {key.hex()}\n'
+                f'vfs-1-size = {len(tvfs)} {len(encoded)}\n')
+            tool = Path(__file__).resolve().parents[1] / 'tools/recover_casc_manifest.py'
+            command = [sys.executable, str(tool), str(root)]
+            strict = subprocess.run(command + ['--manifest', str(root / 'strict.psv')], capture_output=True)
+            self.assertNotEqual(strict.returncode, 0)
+            partial = root / 'partial.psv'
+            result = subprocess.run(command + ['--manifest', str(partial), '--available-only'], capture_output=True, text=True, check=True)
+            self.assertFalse(json.loads(result.stdout)['complete_manifest'])
+            self.assertEqual(len(json.loads(partial.with_suffix('.missing.json').read_text())), 1)
+            (root / 'data/00-00000001.data').write_bytes(resource)
+            complete = root / 'complete.psv'
+            result = subprocess.run(command + ['--manifest', str(complete)], capture_output=True, text=True, check=True)
+            self.assertTrue(json.loads(result.stdout)['complete_manifest'])
+            self.assertEqual(complete.read_text().splitlines()[1].split('|')[9], 'data:a')
 
     def test_invalid_header_and_spans(self):
         tvfs, _ = fixture(b'test', 'n')

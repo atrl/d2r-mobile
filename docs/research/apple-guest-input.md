@@ -110,3 +110,13 @@ The community runtime overlay includes root-level `ctrl_touch` and `touch_string
 All 162 resource shader packages have now been extracted from the downloaded ZIP entry prefixes and checked against their TVFS EKey prefixes and decoded sizes. The combined packages plus recovered embedded shaders produce 6,931 unique jobs. Both subgroup-32 and subgroup-64 variants completed: 6,931/6,931 SPIR-V modules passed Vulkan 1.1 validation and 6,931/6,931 reflection pairs were generated for each variant. The existing capability-repair pass amended storage-image declarations in 15 modules per variant.
 
 已提取全部 162 个资源着色器包，与内嵌着色器合并后得到 6,931 个独立任务。32/64 两种分组配置均完整转换并通过 Vulkan 1.1 校验，反射文件全部齐全。该结果仍不等于 GPU 画面或游戏运行验证；提取时完整 ZIP 尚未下载完毕，全包 SHA-256 校验和完整资源清单重建仍待后续流水线完成。
+
+## Complete archive check and omitted resources / 全包校验与省略资源
+
+All three downloaded parts match the publisher's SHA-256 values, and the combined 5,424,765,988-byte ZIP matches `3de74f7913f61a6d3e9bd6c21c1b0f006b7753542688e9c9f0aa1057f75ab5c6`. All 18 resource entries were extracted with ZIP CRC checks. The runtime index references additional archives omitted by this community distribution; strict manifest generation correctly stops on their absence.
+
+`--available-only` is an explicit diagnostic mode: it decodes and verifies present resources, emits a missing-path report, and keeps `complete_manifest: false` when omissions remain. Recovered manifest paths now retain the extraction-tool `data:` namespace, required by the vault table generator. Synthetic tests check strict failure, explicit missing reports and namespace preservation.
+
+The initial omissions included two non-locale `cain6` configurations. Local recovery found an existing identical variant and restored the state-machine configuration from its cain3 equivalent. Recompression at zlib level 9 matches the original index's 9-byte EKey hash prefix and exact encoded/decoded lengths for both files. This is validation against the index's stored prefix, not a claim to have an independently published full-file hash. The existing overlay writer placed the restored files and rebuilt indexes in `00-00000008.data`. The repaired manifest still reports 23,241 omitted entries, all under `locales/` for languages excluded by the community package; simplified-Chinese resources are present. No successful Android gameplay claim follows from this repair.
+
+三个分卷及合并 ZIP 均已通过发布者 SHA-256 校验，18 个资源档案已通过 ZIP CRC 解压。已验证恢复两个非语言配置并重建覆盖层；剩余缺失清单是社区包省略的其他语言资源。清单工具保留显式缺失报告，未将部分语言包描述为全语言完整提取。派生表和最终 Android 包仍在生成与验证中。

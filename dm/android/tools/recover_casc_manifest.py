@@ -94,27 +94,35 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('romfs', type=Path)
     parser.add_argument('--manifest', type=Path, help='new output file; decodes all files to compute content hashes')
+    parser.add_argument('--available-only', action='store_true', help='diagnostic partial manifest; record missing archives/paths instead of claiming completeness')
     args = parser.parse_args()
     tvfs = bytes(casc_overlay.load_vfs1(args.romfs))
     _, config = casc_overlay.config_values(args.romfs / 'data/.build.config')
     if hashlib.md5(tvfs).hexdigest() != config['vfs-1'].split()[0]:
         raise ValueError('TVFS content hash mismatch')
-    rows = list(entries(tvfs))
+    rows = list(entries(tvfs)); missing = []
     if args.manifest:
         temporary = args.manifest.with_suffix(args.manifest.suffix + '.partial')
         if args.manifest.exists(): raise ValueError('output already exists')
         with temporary.open('x') as stream:
             stream.write('# Recovered from TVFS; content keys computed from verified decoded bytes\n')
             for number, row in enumerate(rows):
-                content = decode(args.romfs, row); key = bytes.fromhex(row['key'])
+                key = bytes.fromhex(row['key'])
+                archive = f'{key[9]:02d}-{key[10]:08d}.data'
+                if args.available_only and not (args.romfs / 'data' / archive).is_file():
+                    missing.append({'path': row['path'], 'archive': archive})
+                    continue
+                content = decode(args.romfs, row)
                 fields = [str(number), '0', str(key[9]), str(key[10]), hashlib.md5(content).hexdigest(),
-                          str(row['size']), row['key'], str(row['encoded']), row['encoding'], row['path'], '0']
+                          str(row['size']), row['key'], str(row['encoded']), row['encoding'], 'data:' + row['path'], '0']
                 stream.write('|'.join(fields) + '\n')
         temporary.rename(args.manifest)
+        if args.available_only:
+            args.manifest.with_suffix('.missing.json').write_text(json.dumps(missing, indent=2) + '\n')
     shaders = [r for r in rows if r['path'].startswith('data/hd/shaders/') and r['path'].endswith('.bin')]
     print(json.dumps({'files': len(rows), 'shader_packages': len(shaders),
                       'shader_archives': dict(Counter(f"{bytes.fromhex(r['key'])[9]:02d}-{bytes.fromhex(r['key'])[10]:08d}.data" for r in shaders)),
-                      'manifest_written': bool(args.manifest)}, indent=2))
+                      'manifest_written': bool(args.manifest), 'missing_files': len(missing), 'complete_manifest': bool(args.manifest) and not missing}, indent=2))
 
 
 if __name__ == '__main__': main()
