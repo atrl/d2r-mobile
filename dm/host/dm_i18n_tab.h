@@ -501,4 +501,5 @@ static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {
     { "dmAndroidTouchWorldHint", "点地面移动，点目标交互；技能和药水可点底部栏。右侧「操作」展开按键，长按查看提示。", "Tap ground to move or a target to interact. Tap skills and potions on the bottom bar. Keys opens controls; hold it for help." },
     { "dmAndroidTouchPanelHint", "直接点选页签和物品，双击使用或装备，拖动物品整理；右侧可展开备用按键。", "Tap tabs and items, double-tap to use or equip, drag to arrange. Open Keys for fallback controls." },
     { "dmAndroidTouchMenuHint", "直接点击菜单；右侧「操作」可展开备用按键，长按查看提示。", "Tap menu entries directly. Keys opens fallback controls; hold it for help." },
+    { "dmAndroidTouchSize", "操作按钮大小", "Control size" },
 };
