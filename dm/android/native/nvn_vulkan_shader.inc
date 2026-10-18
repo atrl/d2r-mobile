@@ -50,15 +50,26 @@ static void resource_create_report(void) {
 // 离线翻译选项必须匹配实际 GPU 分组；独立 GLSL 测试和旧缓存的未知配置明确记录。
 // Offline translation options must match actual GPU subgroups; explicitly record unknown profiles of independent GLSL tests and legacy caches.
 static void shader_profile_check(void) {
-    static int checked;if(checked)return;checked=1;
+    static int checked;if(checked)return;
     const char *dir=getenv("DM_VK_SHADERS");if(!dir)die("Set DM_VK_SHADERS to Vulkan shader cache");
-    char path[1024];snprintf(path,sizeof path,"%s/host-subgroup-size.txt",dir);FILE *file=fopen(path,"r");
-    if(!file){if(errno!=ENOENT)die("Vulkan shader profile open");LOG("[vulkan] shader subgroup profile unknown; shader execution subgroup=%u",gpu_subgroup_size);return;}
-    char data[32];size_t n=fread(data,1,sizeof data-1,file);int extra=fgetc(file),error=ferror(file);fclose(file);data[n]=0;
-    errno=0;char *end;unsigned long size=strtoul(data,&end,10);while(*end==' '||*end=='\n'||*end=='\r'||*end=='\t')end++;
-    if(error||extra!=EOF||errno||end==data||*end||!size||size>128||(size&(size-1)))die("Invalid Vulkan shader subgroup profile");
-    if(size!=gpu_subgroup_size)die("Vulkan shader subgroup profile %lu differs from selected shader execution %u; rebuild for the actual policy",size,gpu_subgroup_size);
-    LOG("[vulkan] shader subgroup profile=%lu matches selected shader execution",size);
+    char selected[1024];snprintf(selected,sizeof selected,"%s",dir);
+    for(int attempt=0;attempt<2;attempt++){
+        char path[1200];snprintf(path,sizeof path,"%s/host-subgroup-size.txt",selected);FILE *file=fopen(path,"r");
+        if(!file){
+            if(errno!=ENOENT||attempt)die("Missing compatible Vulkan shader profile %s; install system GPU compatibility data",path);
+            LOG("[vulkan] shader subgroup profile unknown; shader execution subgroup=%u",gpu_subgroup_size);checked=1;return;
+        }
+        char data[32];size_t n=fread(data,1,sizeof data-1,file);int extra=fgetc(file),error=ferror(file);fclose(file);data[n]=0;
+        errno=0;char *end;unsigned long size=strtoul(data,&end,10);while(*end==' '||*end=='\n'||*end=='\r'||*end=='\t')end++;
+        if(error||extra!=EOF||errno||end==data||*end||!size||size>128||(size&(size-1)))die("Invalid Vulkan shader subgroup profile");
+        if(size==gpu_subgroup_size){
+            if(attempt&&setenv("DM_VK_SHADERS",selected,1))die("Cannot select compatible shader directory");
+            LOG("[vulkan] shader subgroup profile=%lu matches selected shader execution; directory=%s",size,selected);
+            checked=1;return;
+        }
+        if(attempt||gpu_subgroup_size!=64)die("Vulkan shader subgroup profile %lu differs from selected shader execution %u; rebuild for the actual policy",size,gpu_subgroup_size);
+        if(snprintf(selected,sizeof selected,"%s/subgroup64",dir)>=(int)sizeof selected)die("Shader directory too long");
+    }
 }
 static void *read_shader_file(const char *key,const char *suffix,size_t *size) {
     shader_profile_check();
