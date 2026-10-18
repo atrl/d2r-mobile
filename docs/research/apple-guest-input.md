@@ -140,3 +140,12 @@ python3 dm/android/tools/recover_community_overlay.py /path/to/romfs /path/to/re
 python3 dm/android/tools/recover_casc_manifest.py /path/to/repaired-romfs --manifest /path/to/repaired-romfs/data/build_manifest.psv --available-only
 # Use repaired-romfs for subsequent shader/table generation and packaging.
 ```
+
+
+## Full-size launcher import check / 完整候选包导入检查
+
+The actual `PackageArchive.java` importer processed the complete 6,147,543,691-byte candidate ZIP under desktop OpenJDK 17 with a 256 MB Java heap limit. It accepted 6 game files, 25 RomFS files and 20,795 shader files and wrote the completion manifest. All 20,828 extracted files (including manifest and derived table), totaling 6,144,461,541 bytes, were compared by SHA-256 against their ZIP entries with no differences. This verifies the actual streaming importer and two-module swap with this large candidate input; it does not exercise Android's document provider, device filesystem, native loader or GPU.
+
+启动器实际使用的 Java 导入代码已完整导入约 6.15 GB 候选包；20,828 个落盘文件逐一 SHA-256 比对通过。验证环境是桌面 OpenJDK，并非 Android 真机。不能据此宣称游戏能运行。
+
+[Android CI run 39103870220](https://github.com/atrl/d2r-mobile/actions/runs/39103870220) passed all checks and the debug APK build for commit `b119c12`. The release-signed candidate was separately verified locally; PR CI does not build a release-signed APK.
