@@ -104,3 +104,9 @@ The three synthetic conversion suites are included in Android CI. CI installs Un
 The community runtime overlay includes root-level `ctrl_touch` and `touch_strings.tsv`. Previously the Android packer only collected `data/` and flattened resource paths, while the launcher did not set `DM_ROMFS_OVERLAY`; that would omit the sidecars and leave host touch-layout switching disabled. The packer now preserves relative resource paths and includes a complete marker/wording pair (plus the optional textbox table). The imported-package launcher enables the merged overlay when the marker exists and requires its wording table. Synthetic packaging regression, all 19 local CI checks, APK compilation and static import coverage pass. Actual on-device touch behavior remains unverified.
 
 已补齐覆盖层根目录的触控标记及文字表，保留打包相对路径，并在导入包启动时启用该覆盖层。触控标记存在但文字表缺失时明确报错。真机触控交互尚未验证。
+
+## Complete shader-set translation / 完整着色器集合转换
+
+All 162 resource shader packages have now been extracted from the downloaded ZIP entry prefixes and checked against their TVFS EKey prefixes and decoded sizes. The combined packages plus recovered embedded shaders produce 6,931 unique jobs. Both subgroup-32 and subgroup-64 variants completed: 6,931/6,931 SPIR-V modules passed Vulkan 1.1 validation and 6,931/6,931 reflection pairs were generated for each variant. The existing capability-repair pass amended storage-image declarations in 15 modules per variant.
+
+已提取全部 162 个资源着色器包，与内嵌着色器合并后得到 6,931 个独立任务。32/64 两种分组配置均完整转换并通过 Vulkan 1.1 校验，反射文件全部齐全。该结果仍不等于 GPU 画面或游戏运行验证；提取时完整 ZIP 尚未下载完毕，全包 SHA-256 校验和完整资源清单重建仍待后续流水线完成。
