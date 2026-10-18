@@ -25,6 +25,17 @@ FIXED_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 # 包里必须齐全的东西：缺任何一项都不能算一个可用的包。
 GAME_MODULES = ("libdmguest_main.so", "libdmguest_sdk.so", "libdmguest_subsdk0.so")
 GAME_LAYOUTS = tuple(f"{name}.{kind}.tsv" for name in ("main", "sdk", "subsdk0") for kind in ("fixups", "gates"))
+OPTIONAL_GAME = ("libdmguest_subsdk0.so", "subsdk0.fixups.tsv", "subsdk0.gates.tsv")
+
+
+def required_game_files(present):
+    """main/sdk are required; subsdk0 must be wholly present or wholly absent.
+    main/sdk 必需；subsdk0 必须完整存在或完全不存在。
+    """
+    return tuple(n for n in GAME_MODULES + GAME_LAYOUTS
+                 if n not in OPTIONAL_GAME or any(p in present for p in OPTIONAL_GAME))
+
+
 ROMFS_EXTENSIONS = (".data", ".psv")
 
 
@@ -41,10 +52,11 @@ def require_directory(path, label):
 def collect_game(directory):
     """模块与布局文件必须齐全，缺一个就报错——半个模块的包在手机上只会崩。"""
     require_directory(directory, "game")
-    for name in GAME_MODULES + GAME_LAYOUTS:
+    names = required_game_files({p.name for p in directory.iterdir()})
+    for name in names:
         if not (directory / name).is_file():
             raise PackageError(f"game directory is missing {name}")
-    return sorted(GAME_MODULES + GAME_LAYOUTS)
+    return sorted(names)
 
 
 def collect_romfs(directory):

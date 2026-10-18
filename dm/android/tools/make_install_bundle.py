@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 import tempfile
 import zipfile
 
-from build_package import GAME_MODULES, GAME_LAYOUTS
+from build_package import required_game_files
 from verify_apk import verify
 
 
@@ -30,11 +30,11 @@ def validate_package(path):
         manifest = json.loads(archive.read('manifest.json'))
         if manifest.get('format') != 1:
             raise ValueError('unsupported Android package format')
-        required = {'game/' + name for name in GAME_MODULES + GAME_LAYOUTS}
+        required = {'game/' + name for name in required_game_files({n[5:] for n in names if n.startswith('game/')})}
         required.update({'shaders/host-subgroup-size.txt', 'derived.tsv'})
         if not required.issubset(names):
             raise ValueError('missing required Android modules, layouts, shader profile or derived.tsv')
-        if any(archive.getinfo(name).file_size == 0 for name in required):
+        if any(archive.getinfo(name).file_size == 0 for name in required if not name.endswith('.gates.tsv')):
             raise ValueError('empty required entry')
         if not any(name.startswith('shaders/') and name.endswith('.spv') for name in names):
             raise ValueError('missing Vulkan SPIR-V shaders')

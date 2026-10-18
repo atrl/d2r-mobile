@@ -46,6 +46,26 @@ class BundleTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             bundle(apk, self.package, output)
 
+    def test_two_modules_and_partial_third_rejected(self):
+        from build_package import collect_game, OPTIONAL_GAME, PackageError
+        game = self.root / 'two-game'; game.mkdir()
+        for name in GAME_MODULES + GAME_LAYOUTS:
+            if name not in OPTIONAL_GAME: (game / name).write_bytes(b'x')
+        self.assertEqual(len(collect_game(game)), 6)
+        (game / 'subsdk0.gates.tsv').write_bytes(b'')
+        with self.assertRaises(PackageError): collect_game(game)
+
+    def test_two_module_bundle_and_empty_movie_gates(self):
+        from build_package import OPTIONAL_GAME
+        (self.root / 'game/subsdk0.gates.tsv').write_bytes(b'')
+        three = self.root / 'three-empty-gates.zip'
+        assemble(three, self.root / 'game', self.root / 'romfs', self.root / 'shaders', self.root / 'derived.tsv', quiet=True)
+        validate_package(three)
+        for name in OPTIONAL_GAME: (self.root / 'game' / name).unlink()
+        two = self.root / 'two.zip'
+        assemble(two, self.root / 'game', self.root / 'romfs', self.root / 'shaders', self.root / 'derived.tsv', quiet=True)
+        validate_package(two)
+
     def test_apple_input_rejected(self):
         apple = self.root / 'apple.zip'
         with zipfile.ZipFile(apple, 'w') as archive:

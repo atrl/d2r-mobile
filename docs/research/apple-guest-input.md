@@ -75,3 +75,9 @@ python3 dm/android/tools/recover_casc_manifest.py /path/to/romfs
 python3 dm/android/tools/recover_casc_manifest.py /path/to/romfs --manifest /path/to/romfs/data/build_manifest.psv
 python3 dm/android/tools/build_shaders.py /path/to/romfs /path/to/main.apple-patched.bin /tmp/shaders --main-image --validate
 ```
+
+## Two-module Android packaging / Android 双模块包
+
+The package builder, Java importer and native launcher now accept main/sdk-only inputs while requiring all three files whenever any subsdk0 file is present. The existing three-module path remains supported. Bundle validation also permits empty gate tables, matching the actual importer contract. Java regression tests exercise complete two-module imports and rejection of partial subsdk0. Six Python bundle tests pass; all 16 existing CI checks pass. The game-host Android APK compiled successfully on Linux. No target Android device gameplay has been verified.
+
+打包、导入、启动三处已支持完整双模块输入；三模块输入继续支持，残缺第三模块仍然拒绝。已编译真实游戏宿主 APK，但没有将此构建发布为可玩版本。完整资源和着色器转换仍在进行。
