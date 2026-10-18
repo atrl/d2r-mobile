@@ -462,4 +462,12 @@ static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {
     { "dmAndroidSaveWorking", "正在处理存档…", "Working on the save…" },
     { "dmAndroidFoldDiagnostic", "折叠屏与触控自检（无需游戏数据）", "Fold and touch check (no game data)" },
     { "dmAndroidLaunchSetupHelp", "APK 仅包含运行程序，不包含游戏。\n\n需要你自己的 Switch 版暗黑破坏神 II：重制版本体、对应更新及 prod.keys，在电脑上用发布页的打包套件生成 d2r-package.zip，然后传到手机并选择“导入数据包”。PC 版安装目录不能直接导入。\n\n尚无游戏文件时只能使用折叠屏与触控自检。已有生成的数据包可点下方按钮选择。", "The APK contains the runtime, not the game.\n\nUse your own Switch version of Diablo II: Resurrected, its matching update and prod.keys with the packaging kit from the release page on a computer to create d2r-package.zip. Copy it to your phone and import it. A PC installation folder cannot be imported directly.\n\nWithout game files, only the fold and touch diagnostic is available. If you already have a prepared package, select it below." },
+    { "dmAndroidUpdateTitle", "检查 GitHub 更新", "Check GitHub updates" },
+    { "dmAndroidUpdateChecking", "正在检查 GitHub 发布…", "Checking GitHub releases…" },
+    { "dmAndroidUpdateCurrent", "当前版本 %s；未发现更新的可下载安装包。", "Current version %s; no newer downloadable APK found." },
+    { "dmAndroidUpdateFound", "当前：%s\n新版：%s\n\n下载后打开 APK 覆盖安装，保留已导入的数据与存档。更新仅包含程序，不包含游戏数据；预览版仍需真机验证。", "Installed: %s\nAvailable: %s\n\nOpen the downloaded APK to update while keeping imported data and saves. Updates contain the app, not game data. Preview releases still require device testing." },
+    { "dmAndroidUpdateFailed", "检查失败，可能是网络、GitHub 限流或当前为开发版。可稍后重试或打开发布页。", "Check failed: network, GitHub rate limit or an unversioned development build. Retry later or open releases." },
+    { "dmAndroidUpdateDownload", "下载新版 APK", "Download APK" },
+    { "dmAndroidUpdateReleases", "打开发布页", "Open releases" },
+    { "dmAndroidUpdateBrowser", "没有可用的浏览器，请手动打开：", "No browser available. Open this address manually:" },
 };
