@@ -95,3 +95,6 @@ The nine recovered embedded shader jobs were translated with the repository's An
 ```sh
 python3 dm/android/tools/audit_guest_imports.py /path/to/apple-images dm/android/build/game-host/libdmandroid.so
 ```
+
+The three synthetic conversion suites are included in Android CI. CI installs Unicorn 2.1.4 and never downloads community game inputs; those remain local conversion inputs.
+转换的三组合成测试已接入 Android CI，固定使用 Unicorn 2.1.4；CI 不下载游戏输入。
