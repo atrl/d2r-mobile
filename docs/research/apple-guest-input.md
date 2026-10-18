@@ -81,3 +81,17 @@ python3 dm/android/tools/build_shaders.py /path/to/romfs /path/to/main.apple-pat
 The package builder, Java importer and native launcher now accept main/sdk-only inputs while requiring all three files whenever any subsdk0 file is present. The existing three-module path remains supported. Bundle validation also permits empty gate tables, matching the actual importer contract. Java regression tests exercise complete two-module imports and rejection of partial subsdk0. Six Python bundle tests pass; all 16 existing CI checks pass. The game-host Android APK compiled successfully on Linux. No target Android device gameplay has been verified.
 
 打包、导入、启动三处已支持完整双模块输入；三模块输入继续支持，残缺第三模块仍然拒绝。已编译真实游戏宿主 APK，但没有将此构建发布为可玩版本。完整资源和着色器转换仍在进行。
+
+## Import and embedded shader checks / 导入依赖与内嵌着色器检查
+
+`audit_guest_imports.py` walks actual guest relocation tables and the compiled Android host's `dm_hle` / `dm_force` sections, resolving their ELF relative relocations. For the recovered input it found 656 main imports and 13 sdk imports; no unresolved strong imports and no unreferenced force-table entries. This is static name coverage, not a check of calling conventions, execution paths or Android linker behavior.
+
+静态核对真实重定位和编译后宿主注册表，未发现缺失强符号，也没有未被引用的强制接管条目。检查结果仅证明符号名称覆盖，不证明 ABI 或运行行为。
+
+The nine recovered embedded shader jobs were translated with the repository's Android Ryujinx translator using .NET SDK 10.0.402. All 9/9 SPIR-V modules passed the NDK `spirv-val --target-env vulkan1.1` check and all 9 reflection pairs were produced. This covers only embedded jobs; the 162 resource shader packages still await archive download and extraction. GPU rendering has not been tested.
+
+内嵌着色器已实际完成转换：9/9 SPIR-V 通过 Vulkan 1.1 校验，9/9 反射文件齐全。其余 162 个资源着色器包尚待完整资源下载和提取；未验证 GPU 画面。
+
+```sh
+python3 dm/android/tools/audit_guest_imports.py /path/to/apple-images dm/android/build/game-host/libdmandroid.so
+```
