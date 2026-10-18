@@ -92,14 +92,15 @@ jobs:
           **首次安装：下载下方带版本号、以 `-arm64.apk` 结尾的安装包。**
           请使用手机浏览器完成下载，再到手机“文件管理 → 下载”打开 APK；如系统询问，请允许该来源安装应用。不要在聊天窗口中预览安装包。
           `D2R-Android-port.apk` 是内容相同的更新兼容入口，两个 APK 只需下载一个。ZIP、SHA256SUMS 和 signature.txt 都不是安装包。
-          preview.15：新增可拖动操作布局。长按“操作/收起”，或在游戏内系统返回菜单选择“拖动布局”；拖动金色框内的摇杆和按键组即可放置，位置自动保存。点“完成”可退出编辑、调节大小（75%–150%）或恢复当前屏幕默认布局。
+          preview.16：限制慢帧诊断自身的开销。旧版每帧超过20 ms就会读取9次CPU频率文件并立即刷新日志；新版每秒最多采样两次，保留逐帧统计，限制日志到约4 MiB。60个30 FPS慢帧回归中，频率文件访问540→36次，记录60→4条。诊断增加最后16 KiB采样日志，用于区分CPU工作量和降频。这是明确的I/O开销修复，不代表已经解决vivo术士低帧率，真机帧率收益待同场景对照。
+          保留preview.15可拖动操作布局。长按“操作/收起”，或在游戏内系统返回菜单选择“拖动布局”；拖动金色框内的摇杆和按键组即可放置，位置自动保存。点“完成”可退出编辑、调节大小（75%–150%）或恢复当前屏幕默认布局。
           近方形内屏与长屏、横竖屏分别记忆布局；按相对位置适配屏幕尺寸，限制在安全区域并保留编辑入口。编辑时屏蔽游戏触摸，但游戏不会暂停，请在安全处调整。当前按组移动，ABXY等组内按键暂不能单独拆分。
           保留场景切换后展开状态和直接触摸。诊断新增按钮大小和布局坐标，方便跟进真实设备问题。已收到vivo报告，低帧率片段存在较高提交线程CPU开销；本版不宣称解决16 FPS/掉帧。
           新增“自适应宽屏”分辨率选项：宽屏按当前比例渲染；窄屏/折叠内屏保持完整16:9画面，不拉伸、不裁切。方形原生渲染在测试中触发裁剪错误，因此本版不启用。切换屏幕后重新启动可重新计算分辨率。
           新增默认关闭的“自动发送诊断”：填写私下提供的调试接收地址并开启后，每30秒上传设备信息和近期日志，可随时关闭，不传存档或游戏资源；日志可能含角色名和本地路径。进程崩溃后需重开启动器才能补传，临时通道重启后地址需更新。
           vivo V2436A用户已确认preview.12内置Turnip可运行，系统驱动仍会退出。已有subgroup64兼容补丁请保留，继续使用内置Turnip；无需重新下载补丁或游戏数据。
           首次安装：在启动器选择“下载游戏数据”，约6.15 GB，预留13 GB空间。支持最多四连接、速率显示、续传和SHA-256校验。APK与数据独立更新，覆盖安装保留数据/存档；“检查GitHub更新”支持预览版。数据引用preview.5固定资源，需保留该发布。
-          验证：28组Linux检查通过，含33项公共触摸回归断言；拖动布局经过Android模拟器验证。vivo真机新布局及完整战斗仍需验证。
+          验证：29组Linux检查通过，含33项公共触摸回归断言；拖动布局经过Android模拟器验证。vivo真机新布局及完整战斗仍需验证。
           Download the versioned arm64 APK and install over the existing app. No game-data redownload is needed. Touch uses the shared menu/inventory/world adapter; optional controls collapse into an edge entry. Inner screens preserve the full picture with letterboxing. Automatic diagnostics is opt-in. Real vivo touch/fold acceptance remains pending.
           EOF
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --title "D2R Android $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" dist/*
