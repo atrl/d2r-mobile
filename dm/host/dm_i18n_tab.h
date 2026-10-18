@@ -502,4 +502,8 @@ static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {
     { "dmAndroidTouchPanelHint", "直接点选页签和物品，双击使用或装备，拖动物品整理；右侧可展开备用按键。", "Tap tabs and items, double-tap to use or equip, drag to arrange. Open Keys for fallback controls." },
     { "dmAndroidTouchMenuHint", "直接点击菜单；右侧「操作」可展开备用按键，长按查看提示。", "Tap menu entries directly. Keys opens fallback controls; hold it for help." },
     { "dmAndroidTouchSize", "操作按钮大小", "Control size" },
+    { "dmAndroidTouchEdit", "拖动布局", "Arrange controls" },
+    { "dmAndroidTouchEditHint", "拖动金色边框内的摇杆或按键组，位置自动保存。点“完成”可退出、调大小或恢复本屏默认布局。游戏仍在运行，请在安全处调整。", "Drag the outlined stick or button groups. Positions save automatically. Tap Done to finish, resize or reset this screen layout. The game keeps running; edit in a safe place." },
+    { "dmAndroidTouchDone", "完成", "Done" },
+    { "dmAndroidTouchReset", "恢复本屏默认布局", "Reset this screen layout" },
 };
