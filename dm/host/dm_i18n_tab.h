@@ -477,4 +477,7 @@ static const struct { const char *k, *zh, *en; } k_dm_i18n[] = {
     { "dmAndroidDataConnecting", "正在连接 GitHub，请稍候…", "Connecting to GitHub…" },
     { "dmAndroidDataVerifying", "正在校验已下载的分卷，请稍候…", "Verifying downloaded part…" },
     { "dmAndroidDataRetrying", "连接中断，正在第 %d / 3 次尝试；已下载内容保留", "Connection interrupted; attempt %d / 3. Downloaded bytes are retained." },
+    { "dmAndroidCrashReport", "启动错误与诊断", "Startup errors and diagnostics" },
+    { "dmAndroidCrashExport", "导出诊断报告", "Export diagnostic report" },
+    { "dmAndroidCrashExported", "诊断报告已导出；请发送该文本文件以排查启动退出。", "Report exported; send this text file to investigate the startup exit." },
 };
