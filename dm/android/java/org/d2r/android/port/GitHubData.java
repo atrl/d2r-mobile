@@ -4,6 +4,9 @@ import java.io.*;
 import java.net.*;
 import java.security.*;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Immutable, SHA-256 pinned data release. APK updates do not redownload this data. */
 final class GitHubData {
@@ -19,6 +22,7 @@ final class GitHubData {
         if (sink.cancelled()) throw new IOException("Download cancelled; tap Download game data to resume.");
     }
     static void fetch(URL url, File file, long size, String hash, Sink sink) throws Exception {
+        check(sink);
         long offset = file.isFile() ? file.length() : 0;
         if (offset > size) { if (!file.delete()) throw new IOException("Cannot reset download"); offset = 0; }
         if (offset < size) {
@@ -73,17 +77,76 @@ final class GitHubData {
     static File[] download(File directory, Sink sink) throws Exception {
         if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Cannot create download folder");
         File[] parts = new File[4];
+        URL[] urls = new URL[4];
+        long[] sizes = {1900000000L, 1900000000L, 1900000000L, 447543691L};
         for (int i = 0; i < parts.length; i++) {
             String suffix = String.format(Locale.ROOT, "%03d", i + 1);
             parts[i] = new File(directory, "d2r-package.zip." + suffix);
-            final long base = i * 1900000000L;
-            fetchWithRetry(new URL(BASE + suffix), parts[i], i == 3 ? 447543691L : 1900000000L, HASHES[i], new Sink() {
-                public boolean cancelled() { return sink.cancelled(); }
-                public void progress(long bytes) { sink.progress(base + bytes); }
-                public void phase(String phase, int attempt) { sink.phase(phase, attempt); }
-            });
+            urls[i] = new URL(BASE + suffix);
         }
+        fetchParts(urls, parts, sizes, HASHES, sink);
         return parts;
+    }
+    // Independent files permit four connections without changing the package or its resume offsets.
+    static void fetchParts(URL[] urls, File[] parts, long[] sizes, String[] hashes, Sink sink) throws Exception {
+        if (urls.length != parts.length || sizes.length != parts.length || hashes.length != parts.length)
+            throw new IllegalArgumentException("Part metadata length mismatch");
+        check(sink);
+        long[] downloaded = new long[parts.length];
+        for (int i = 0; i < parts.length; i++)
+            downloaded[i] = parts[i].isFile() && parts[i].length() <= sizes[i] ? parts[i].length() : 0;
+        Object progressLock = new Object();
+        AtomicBoolean stopping = new AtomicBoolean();
+        AtomicReference<Exception> failure = new AtomicReference<>();
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        CompletionService<Void> finished = new ExecutorCompletionService<>(pool);
+        try {
+            for (int i = 0; i < parts.length; i++) {
+                final int part = i;
+                finished.submit(() -> {
+                    try {
+                        fetchWithRetry(urls[part], parts[part], sizes[part], hashes[part], new Sink() {
+                            public boolean cancelled() { return stopping.get() || Thread.currentThread().isInterrupted() || sink.cancelled(); }
+                            public void progress(long bytes) {
+                                synchronized (progressLock) {
+                                    downloaded[part] = bytes;
+                                    long total = 0;
+                                    for (long n : downloaded) total += n;
+                                    sink.progress(total);
+                                }
+                            }
+                            public void phase(String phase, int attempt) {
+                                synchronized (progressLock) {
+                                    // A verified part must not replace active download progress with a global verification message.
+                                    if ("verifying".equals(phase))
+                                        for (int j = 0; j < parts.length; j++) if (downloaded[j] != sizes[j]) return;
+                                    sink.phase(phase, attempt);
+                                }
+                            }
+                        });
+                        return null;
+                    } catch (Exception error) { failure.compareAndSet(null, error); stopping.set(true); throw error; }
+                });
+            }
+            for (int i = 0; i < parts.length; i++) {
+                try { finished.take().get(); }
+                catch (ExecutionException error) {
+                    if (failure.get() != null) throw failure.get();
+                    if (error.getCause() instanceof Exception) throw (Exception)error.getCause();
+                    throw new IOException("Download worker failed", error.getCause());
+                }
+            }
+        } finally {
+            stopping.set(true);
+            pool.shutdownNow();
+            // Wait for socket timeouts/worker cleanup before allowing another download to touch these files.
+            boolean interrupted = false;
+            while (!pool.isTerminated()) {
+                try { pool.awaitTermination(1, TimeUnit.SECONDS); }
+                catch (InterruptedException error) { interrupted = true; }
+            }
+            if (interrupted) Thread.currentThread().interrupt();
+        }
     }
     static InputStream open(File[] parts) throws IOException {
         Vector<InputStream> streams = new Vector<>();
