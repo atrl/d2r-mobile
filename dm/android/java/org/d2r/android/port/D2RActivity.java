@@ -158,6 +158,10 @@ public final class D2RActivity extends NativeActivity {
         controlSize.setText(text("dmAndroidTouchSize"));
         controlSize.setOnClickListener(v -> { hideMenu(); if (touchControls != null) touchControls.configureSize(); });
         column.addView(controlSize);
+        TextView controlLayout = menuRow();
+        controlLayout.setText(text("dmAndroidTouchEdit"));
+        controlLayout.setOnClickListener(v -> { controlsEnabled = true; hideMenu(); updateTouchVisibility(); if (touchControls != null) touchControls.editLayout(); });
+        column.addView(controlLayout);
         menuQualityRow = menuRow();
         menuQualityRow.setOnClickListener(v -> { qualityPreset = (qualityPreset + 1) % QUALITY_KEYS.length; setQualityPreset(QUALITY_LEVELS[qualityPreset]); updateMenuLabels(); });
         column.addView(menuQualityRow);

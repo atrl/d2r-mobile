@@ -92,13 +92,14 @@ jobs:
           **首次安装：下载下方带版本号、以 `-arm64.apk` 结尾的安装包。**
           请使用手机浏览器完成下载，再到手机“文件管理 → 下载”打开 APK；如系统询问，请允许该来源安装应用。不要在聊天窗口中预览安装包。
           `D2R-Android-port.apk` 是内容相同的更新兼容入口，两个 APK 只需下载一个。ZIP、SHA256SUMS 和 signature.txt 都不是安装包。
-          preview.14：修正切换场景后备用按钮自动消失，展开/收起状态改为由玩家控制并保存。游戏内按系统返回键打开菜单，新增“操作按钮大小”：75%、100%、125%、150%，默认100%，仅受屏幕边界限制，不再为了塞入黑边强行缩小。放大后空间不足时会覆盖画面边缘。首次使用默认展开，之后记住玩家选择。
-          保留直接触摸菜单、背包、世界目标及技能/药水栏。此版本只修复控件可用性，不宣称解决vivo术士场景16 FPS/掉帧；尚待该设备的最新日志定位。
+          preview.15：新增可拖动操作布局。长按“操作/收起”，或在游戏内系统返回菜单选择“拖动布局”；拖动金色框内的摇杆和按键组即可放置，位置自动保存。点“完成”可退出编辑、调节大小（75%–150%）或恢复当前屏幕默认布局。
+          近方形内屏与长屏、横竖屏分别记忆布局；按相对位置适配屏幕尺寸，限制在安全区域并保留编辑入口。编辑时屏蔽游戏触摸，但游戏不会暂停，请在安全处调整。当前按组移动，ABXY等组内按键暂不能单独拆分。
+          保留场景切换后展开状态和直接触摸。诊断新增按钮大小和布局坐标，方便跟进真实设备问题。已收到vivo报告，低帧率片段存在较高提交线程CPU开销；本版不宣称解决16 FPS/掉帧。
           新增“自适应宽屏”分辨率选项：宽屏按当前比例渲染；窄屏/折叠内屏保持完整16:9画面，不拉伸、不裁切。方形原生渲染在测试中触发裁剪错误，因此本版不启用。切换屏幕后重新启动可重新计算分辨率。
           新增默认关闭的“自动发送诊断”：填写私下提供的调试接收地址并开启后，每30秒上传设备信息和近期日志，可随时关闭，不传存档或游戏资源；日志可能含角色名和本地路径。进程崩溃后需重开启动器才能补传，临时通道重启后地址需更新。
           vivo V2436A用户已确认preview.12内置Turnip可运行，系统驱动仍会退出。已有subgroup64兼容补丁请保留，继续使用内置Turnip；无需重新下载补丁或游戏数据。
           首次安装：在启动器选择“下载游戏数据”，约6.15 GB，预留13 GB空间。支持最多四连接、速率显示、续传和SHA-256校验。APK与数据独立更新，覆盖安装保留数据/存档；“检查GitHub更新”支持预览版。数据引用preview.5固定资源，需保留该发布。
-          验证：28组Linux检查通过，含33项公共触摸回归断言；Android15模拟器已通过触摸进入营地、点传送点走近并交互、药水栏命中。vivo真机的新触屏交互、折叠切换、温控和完整战斗仍需验证。
+          验证：28组Linux检查通过，含33项公共触摸回归断言；拖动布局经过Android模拟器验证。vivo真机新布局及完整战斗仍需验证。
           Download the versioned arm64 APK and install over the existing app. No game-data redownload is needed. Touch uses the shared menu/inventory/world adapter; optional controls collapse into an edge entry. Inner screens preserve the full picture with letterboxing. Automatic diagnostics is opt-in. Real vivo touch/fold acceptance remains pending.
           EOF
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --title "D2R Android $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" dist/*

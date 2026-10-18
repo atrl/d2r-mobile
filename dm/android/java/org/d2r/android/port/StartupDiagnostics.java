@@ -33,6 +33,16 @@ final class StartupDiagnostics {
                 }
             }
         } catch (Exception error) { report.append("System diagnostics unavailable: ").append(error).append('\n'); }
+        android.content.SharedPreferences controls = context.getSharedPreferences("touch-controls", 0);
+        report.append("\nTouch controls: size=").append(controls.getInt("size", 100))
+            .append(" expanded=").append(controls.getBoolean("expanded", true)).append('\n');
+        for (String screen : new String[]{"inner", "outer"}) for (String orientation : new String[]{"landscape", "portrait"}) {
+            for (int group = 0; group < 6; group++) {
+                String key = "layout." + screen + "." + orientation + "." + group;
+                if (controls.contains(key + "x")) report.append(key).append("=")
+                    .append(controls.getFloat(key + "x", 0)).append(',').append(controls.getFloat(key + "y", 0)).append('\n');
+            }
+        }
         append(report, new File(context.getFilesDir(), "temp/launch-settings.conf"), 8192);
         append(report, new File(context.getFilesDir(), "temp/gpu-driver.conf"), 4096);
         File external = context.getExternalFilesDir(null);

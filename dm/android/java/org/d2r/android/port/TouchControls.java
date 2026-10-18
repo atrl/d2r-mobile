@@ -29,7 +29,46 @@ final class TouchControls {
     private float density;
     private final float gameAspect;
     private final View.OnLayoutChangeListener layoutListener;
-    private boolean visible, destroyed, expanded;
+    private boolean visible, destroyed, expanded, editing;
+    private PopupWindow editShield;
+    private int boundLeft, boundTop, boundRight, boundBottom;
+    private int handleLeft, handleTop, handleEdge;
+    private String layoutProfile = "";
+    private android.content.SharedPreferences preferences() {
+        return activity.getSharedPreferences("touch-controls", 0);
+    }
+
+    void editLayout() {
+        if (destroyed || editing) return;
+        releaseAll(); expanded = true; editing = true;
+        preferences().edit().putBoolean("expanded", true).apply();
+        layout();
+        Toast.makeText(activity, text("dmAndroidTouchEditHint"), Toast.LENGTH_LONG).show();
+    }
+
+    private void finishEditing() {
+        editing = false;
+        if (editShield != null) { editShield.dismiss(); editShield = null; }
+        releaseAll();
+        for (ControlView group : groups) group.dragPointer = -1;
+        layout();
+    }
+
+    private void editActions() {
+        new android.app.AlertDialog.Builder(activity).setTitle(text("dmAndroidTouchEdit"))
+            .setItems(new String[]{text("dmAndroidTouchDone"), text("dmAndroidTouchSize"), text("dmAndroidTouchReset")}, (dialog, which) -> {
+                if (which == 0) finishEditing();
+                else if (which == 1) configureSize();
+                else {
+                    android.content.SharedPreferences.Editor editor = preferences().edit();
+                    for (ControlView group : groups) {
+                        editor.remove(layoutProfile + group.source + "x");
+                        editor.remove(layoutProfile + group.source + "y");
+                    }
+                    editor.apply(); layout();
+                }
+            }).setNegativeButton(android.R.string.cancel, null).show();
+    }
     private final TextView handle;
     private final PopupWindow handleWindow;
     private int scene = -1;
@@ -49,7 +88,7 @@ final class TouchControls {
             decor.postDelayed(this, 250);
         }
     };
-    private int previousWidth, previousHeight;
+    private int previousWidth, previousHeight, previousLayoutWidth, previousLayoutHeight;
     private long publishedButtons;
     private int publishedX, publishedY;
 
@@ -93,9 +132,9 @@ final class TouchControls {
         handleWindow.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         handleWindow.setTouchModal(false); handleWindow.setSplitTouchEnabled(true);
         handleWindow.setInputMethodMode(PopupWindow.INPUT_METHOD_NOT_NEEDED);
-        handle.setOnClickListener(v -> { expanded = !expanded; activity.getSharedPreferences("touch-controls", 0).edit().putBoolean("expanded", expanded).apply(); releaseAll(); layout(); });
+        handle.setOnClickListener(v -> { if (editing) { editActions(); return; } expanded = !expanded; activity.getSharedPreferences("touch-controls", 0).edit().putBoolean("expanded", expanded).apply(); releaseAll(); layout(); });
         handle.setOnLongClickListener(v -> {
-            Toast.makeText(activity, text(scene == 1 ? "dmAndroidTouchWorldHint" : scene == 2 ? "dmAndroidTouchPanelHint" : "dmAndroidTouchMenuHint"), Toast.LENGTH_LONG).show();
+            if (editing) editActions(); else editLayout();
             return true;
         });
         layoutListener = (v, l, t, r, b, oldL, oldT, oldR, oldB) -> layout();
@@ -116,6 +155,8 @@ final class TouchControls {
         decor.removeCallbacks(scenePoll);
         if (value) { decor.post(this::layout); decor.post(scenePoll); }
         else {
+            if (editShield != null) { editShield.dismiss(); editShield = null; }
+            for (ControlView group : groups) group.dragPointer = -1;
             releaseAll();
             for (ControlView group : groups) group.popup.dismiss();
             handleWindow.dismiss();
@@ -196,13 +237,36 @@ final class TouchControls {
                 safeBottom = Math.max(safeBottom, cutout.getSafeInsetBottom());
             }
         }
+        boundLeft = safeLeft; boundTop = safeTop;
+        boundRight = width - safeRight; boundBottom = height - safeBottom;
+        // Separate near-square inner displays from phone displays, and portrait from landscape.
+        String profile = "layout." + (Math.max(width, height) / (float)Math.min(width, height) < 1.45f ? "inner." : "outer.") +
+            (width >= height ? "landscape." : "portrait.");
+        if (!profile.equals(layoutProfile) || width != previousLayoutWidth || height != previousLayoutHeight) {
+            for (ControlView group : groups) group.dragPointer = -1;
+        }
+        layoutProfile = profile; previousLayoutWidth = width; previousLayoutHeight = height;
+        if (editing && editShield == null) {
+            // Re-show controls above the shield, including after a settings dialog loses focus.
+            for (ControlView group : groups) group.popup.dismiss();
+            handleWindow.dismiss();
+            View shield = new View(activity);
+            shield.setBackgroundColor(0x66000000);
+            shield.setOnTouchListener((v, event) -> true);
+            editShield = new PopupWindow(shield, width, height, false);
+            editShield.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            editShield.setInputMethodMode(PopupWindow.INPUT_METHOD_NOT_NEEDED);
+            editShield.showAtLocation(decor, Gravity.TOP | Gravity.LEFT, 0, 0);
+        }
+        if (editShield != null) editShield.update(0, 0, width, height);
         int handleSize = Math.max(32, Math.round(40 * density));
         int handleX = Math.max(safeLeft, width - safeRight - handleSize);
         float pictureHeight = Math.min(height, width / gameAspect);
         float topBar = (height - pictureHeight) / 2;
         int handleY = topBar - safeTop >= handleSize ? Math.round(safeTop + (topBar - safeTop - handleSize) / 2) :
             Math.max(safeTop, Math.min(height - safeBottom - handleSize, height / 2 - handleSize / 2));
-        handle.setText(text(expanded ? "dmAndroidTouchCollapse" : "dmAndroidTouchExpand"));
+        handleLeft = handleX; handleTop = handleY; handleEdge = handleSize;
+        handle.setText(text(editing ? "dmAndroidTouchDone" : expanded ? "dmAndroidTouchCollapse" : "dmAndroidTouchExpand"));
         if (handleWindow.isShowing()) handleWindow.update(handleX, handleY, handleSize, handleSize);
         else { handleWindow.setWidth(handleSize); handleWindow.setHeight(handleSize); handleWindow.showAtLocation(decor, Gravity.TOP | Gravity.LEFT, handleX, handleY); }
         if (!expanded) {
@@ -245,6 +309,13 @@ final class TouchControls {
         float compactX = (width - combined) / 2;
         dpad.place(compactX, compactY);
         menu.place(compactX + dpad.pixelWidth() + margin * 2, compactY);
+        for (ControlView group : groups) {
+            String key = layoutProfile + group.source;
+            if (preferences().contains(key + "x")) {
+                group.place(boundLeft + preferences().getFloat(key + "x", 0) * Math.max(0, boundRight - boundLeft - group.pixelWidth()),
+                    boundTop + preferences().getFloat(key + "y", 0) * Math.max(0, boundBottom - boundTop - group.pixelHeight()));
+            }
+        }
         Log.i("D2RAndroid", "[touch] layout decor=" + width + "x" + height + " scale=" + scale +
             " stick=" + Math.round(stick.windowX) + "," + Math.round(stick.windowY) +
             " stickPx=" + stick.pixelWidth() + "x" + stick.pixelHeight() +
@@ -270,6 +341,15 @@ final class TouchControls {
         final PopupWindow popup;
         final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         float unit, windowX, windowY;
+        int dragPointer = -1;
+        float dragX, dragY, startX, startY;
+
+        void savePosition() {
+            String key = layoutProfile + source;
+            preferences().edit()
+                .putFloat(key + "x", (windowX - boundLeft) / Math.max(1, boundRight - boundLeft - pixelWidth()))
+                .putFloat(key + "y", (windowY - boundTop) / Math.max(1, boundBottom - boundTop - pixelHeight())).apply();
+        }
         final long keyMask;
         boolean drawnInitialized, drawnActive;
         int drawnX, drawnY;
@@ -317,6 +397,13 @@ final class TouchControls {
         int pixelHeight() { return Math.round(logicalHeight * unit); }
 
         void place(float x, float y) {
+            x = Math.max(boundLeft, Math.min(x, boundRight - pixelWidth()));
+            y = Math.max(boundTop, Math.min(y, boundBottom - pixelHeight()));
+            // Keep the edit/toggle entry reachable even if a group is dragged into its corner.
+            if (x < handleLeft + handleEdge && x + pixelWidth() > handleLeft &&
+                y < handleTop + handleEdge && y + pixelHeight() > handleTop) {
+                x = Math.max(boundLeft, handleLeft - pixelWidth());
+            }
             windowX = x; windowY = y;
             int width = pixelWidth(), height = pixelHeight();
             if (popup.isShowing()) popup.update(Math.round(x), Math.round(y), width, height);
@@ -346,6 +433,23 @@ final class TouchControls {
 
         @Override public boolean onTouchEvent(MotionEvent event) {
             int action = event.getActionMasked(), index = event.getActionIndex();
+            if (editing) {
+                if (action == MotionEvent.ACTION_DOWN) {
+                    dragPointer = event.getPointerId(0);
+                    dragX = event.getRawX(); dragY = event.getRawY();
+                    startX = windowX; startY = windowY;
+                } else if (action == MotionEvent.ACTION_MOVE && dragPointer >= 0) {
+                    int i = event.findPointerIndex(dragPointer);
+                    if (i >= 0) {
+                        place(startX + event.getRawX(i) - dragX, startY + event.getRawY(i) - dragY);
+                        savePosition();
+                    }
+                } else if (action == MotionEvent.ACTION_CANCEL ||
+                    ((action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) && event.getPointerId(index) == dragPointer)) {
+                    dragPointer = -1;
+                }
+                return true;
+            }
             if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) pointerDown(event, index);
             else if (action == MotionEvent.ACTION_MOVE) {
                 for (int i = 0; i < event.getPointerCount(); i++) {
@@ -368,6 +472,12 @@ final class TouchControls {
             super.onDraw(canvas);
             canvas.save(); canvas.scale(unit, unit);
             paint.setStrokeWidth(1.5f);
+            if (editing) {
+                paint.setStyle(Paint.Style.FILL); paint.setColor(0x554b8098);
+                canvas.drawRoundRect(1, 1, logicalWidth - 1, logicalHeight - 1, 10, 10, paint);
+                paint.setStyle(Paint.Style.STROKE); paint.setColor(0xffe9c879);
+                canvas.drawRoundRect(1, 1, logicalWidth - 1, logicalHeight - 1, 10, 10, paint);
+            }
             if (stick) {
                 float x = logicalWidth / 2f, y = logicalHeight / 2f;
                 circle(canvas, x, y, 70, 0xffd5cfc1, state.stickPointer() >= 0);
